@@ -4,11 +4,13 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "bullhorn:oauth:local": "node scripts/bullhorn-local-oauth.js"
+    "bullhorn:oauth:local": "node scripts/bullhorn-local-oauth.js",
+    "bullhorn:refresh:check": "node scripts/bullhorn-refresh-token-check.js"
   },
   "dependencies": {
     "@hubspot/api-client": "^12.1.0",
     "axios": "^1.9.0",
+    "dotenv": "^16.4.5",
     "form-data": "^4.0.0"
   }
 }

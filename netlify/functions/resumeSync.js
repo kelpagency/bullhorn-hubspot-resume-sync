@@ -169,19 +169,28 @@ async function getBullhornSession() {
   const refreshToken = process.env.BULLHORN_REFRESH_TOKEN;
   const redirectUri = process.env.BULLHORN_REDIRECT_URI;
 
-  if (!clientId || !clientSecret || !refreshToken || !redirectUri) {
+  if (!clientId || !clientSecret || !refreshToken) {
     throw new Error("Missing Bullhorn OAuth configuration");
   }
 
-  const tokenResponse = await axios.get(`${BULLHORN_AUTH_URL}/oauth/token`, {
-    params: {
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-    },
-  });
+  const tokenParams = {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+  };
+
+  if (redirectUri) {
+    tokenParams.redirect_uri = redirectUri;
+  }
+
+  const tokenResponse = await axios.post(
+    `${BULLHORN_AUTH_URL}/oauth/token`,
+    new URLSearchParams(tokenParams).toString(),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    }
+  );
 
   const accessToken = tokenResponse.data?.access_token;
 
