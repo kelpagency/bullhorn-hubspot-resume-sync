@@ -1,3 +1,5 @@
+"use strict";
+
 const axios = require("axios");
 const FormData = require("form-data");
 const hubspot = require("@hubspot/api-client");
@@ -7,8 +9,8 @@ const BULLHORN_AUTH_URL = process.env.BULLHORN_AUTH_URL || "https://auth.bullhor
 const BULLHORN_REST_BASE_URL =
   process.env.BULLHORN_REST_BASE_URL || "https://rest.bullhornstaffing.com";
 
-exports.main = async (context = {}) => {
-  if (context.httpMethod && context.httpMethod !== "POST") {
+exports.handler = async (event = {}) => {
+  if (event.httpMethod && event.httpMethod !== "POST") {
     return response(405, { error: "Method not allowed" });
   }
 
@@ -18,7 +20,8 @@ exports.main = async (context = {}) => {
 
   let events = [];
   try {
-    const body = typeof context.body === "string" ? context.body : "[]";
+    const rawBody = event.body || "[]";
+    const body = event.isBase64Encoded ? Buffer.from(rawBody, "base64").toString("utf8") : rawBody;
     const parsed = body ? JSON.parse(body) : [];
     events = Array.isArray(parsed) ? parsed : [parsed];
   } catch (error) {
@@ -34,16 +37,16 @@ exports.main = async (context = {}) => {
   });
 
   const results = [];
-  for (const event of events) {
-    if (event.subscriptionType !== "object.propertyChange") {
+  for (const eventPayload of events) {
+    if (eventPayload.subscriptionType !== "object.propertyChange") {
       continue;
     }
 
-    if (event.propertyName && event.propertyName !== "resume") {
+    if (eventPayload.propertyName && eventPayload.propertyName !== "resume") {
       continue;
     }
 
-    const contactId = event.objectId;
+    const contactId = eventPayload.objectId;
     if (!contactId) {
       continue;
     }
@@ -82,10 +85,7 @@ exports.main = async (context = {}) => {
       fileResponse.headers["content-type"] || "application/octet-stream";
 
     const bullhornSession = await getBullhornSession();
-    const candidateId = await findCandidateIdByEmail(
-      bullhornSession,
-      email
-    );
+    const candidateId = await findCandidateIdByEmail(bullhornSession, email);
 
     if (!candidateId) {
       results.push({ contactId, skipped: true, reason: "Candidate not found" });
@@ -151,13 +151,11 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
     return { url: null, fileName };
   }
 
-  const response = await axios.get(`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    }
-  );
+  const response = await axios.get(`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
 
   return {
     url: response.data?.url || response.data?.downloadUrl || null,
@@ -186,7 +184,6 @@ async function getBullhornSession() {
   });
 
   const accessToken = tokenResponse.data?.access_token;
-  const newRefreshToken = tokenResponse.data?.refresh_token;
 
   if (!accessToken) {
     throw new Error("Bullhorn token response missing access_token");
@@ -205,7 +202,6 @@ async function getBullhornSession() {
   return {
     bhRestToken: loginResponse.data?.BhRestToken,
     restUrl: loginResponse.data?.restUrl,
-    refreshToken: newRefreshToken,
   };
 }
 

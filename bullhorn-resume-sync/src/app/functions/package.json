@@ -1,9 +1,0 @@
-{
-  "name": "bullhorn-resume-sync-functions",
-  "version": "0.1.0",
-  "dependencies": {
-    "@hubspot/api-client": "^12.1.0",
-    "axios": "^1.9.0",
-    "form-data": "^4.0.0"
-  }
-}
