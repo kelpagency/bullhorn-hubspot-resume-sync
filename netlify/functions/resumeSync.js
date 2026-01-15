@@ -8,6 +8,7 @@ const HUBSPOT_FILES_BASE_URL = "https://api.hubapi.com";
 const BULLHORN_AUTH_URL = process.env.BULLHORN_AUTH_URL || "https://auth.bullhornstaffing.com";
 const BULLHORN_REST_BASE_URL =
   process.env.BULLHORN_REST_BASE_URL || "https://rest.bullhornstaffing.com";
+const BULLHORN_OAUTH_URL = normalizeOauthUrl(BULLHORN_AUTH_URL);
 
 exports.handler = async (event = {}) => {
   if (event.httpMethod && event.httpMethod !== "POST") {
@@ -168,36 +169,47 @@ async function getBullhornSession({ retryOnAuthFailure = true } = {}) {
   const clientSecret = process.env.BULLHORN_CLIENT_SECRET;
   const refreshToken = process.env.BULLHORN_REFRESH_TOKEN;
   const redirectUri = process.env.BULLHORN_REDIRECT_URI;
+  const username = process.env.BULLHORN_USERNAME;
+  const password = process.env.BULLHORN_PASSWORD;
 
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error("Missing Bullhorn OAuth configuration");
   }
 
-  const tokenParams = {
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-  };
-
-  if (redirectUri) {
-    tokenParams.redirect_uri = redirectUri;
-  }
-
   let tokenResponse;
   try {
-    tokenResponse = await axios.post(
-      `${BULLHORN_AUTH_URL}/oauth/token`,
-      new URLSearchParams(tokenParams).toString(),
-      {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      }
-    );
+    tokenResponse = await exchangeBullhornToken({
+      grantType: "refresh_token",
+      clientId,
+      clientSecret,
+      refreshToken,
+      redirectUri,
+    });
   } catch (error) {
-    const status = error.response?.status;
-    const data = error.response?.data;
-    const detail = data ? JSON.stringify(data) : error.message;
-    throw new Error(`Bullhorn token request failed (${status || "unknown"}): ${detail}`);
+    const payload = error.response?.data;
+    const invalidGrant = payload?.error === "invalid_grant";
+
+    if (invalidGrant && username && password) {
+      const authCode = await getBullhornAuthCodeHeadless({
+        clientId,
+        redirectUri,
+        username,
+        password,
+      });
+
+      tokenResponse = await exchangeBullhornToken({
+        grantType: "authorization_code",
+        clientId,
+        clientSecret,
+        authCode,
+        redirectUri,
+      });
+    } else {
+      const status = error.response?.status;
+      const data = error.response?.data;
+      const detail = data ? JSON.stringify(data) : error.message;
+      throw new Error(`Bullhorn token request failed (${status || "unknown"}): ${detail}`);
+    }
   }
 
   const accessToken = tokenResponse.data?.access_token;
@@ -239,6 +251,80 @@ async function getBullhornSession({ retryOnAuthFailure = true } = {}) {
     bhRestToken: loginResponse.data?.BhRestToken,
     restUrl: loginResponse.data?.restUrl,
   };
+}
+
+async function exchangeBullhornToken({
+  grantType,
+  clientId,
+  clientSecret,
+  refreshToken,
+  authCode,
+  redirectUri,
+}) {
+  const params = {
+    grant_type: grantType,
+    client_id: clientId,
+    client_secret: clientSecret,
+  };
+
+  if (grantType === "refresh_token") {
+    params.refresh_token = refreshToken;
+  } else if (grantType === "authorization_code") {
+    params.code = authCode;
+  }
+
+  if (redirectUri) {
+    params.redirect_uri = redirectUri;
+  }
+
+  return axios.post(`${BULLHORN_OAUTH_URL}/token`, new URLSearchParams(params).toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+}
+
+async function getBullhornAuthCodeHeadless({
+  clientId,
+  redirectUri,
+  username,
+  password,
+}) {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: "code",
+    action: "Login",
+    username,
+    password,
+  });
+
+  if (redirectUri) {
+    params.set("redirect_uri", redirectUri);
+  }
+
+  const response = await axios.get(`${BULLHORN_OAUTH_URL}/authorize`, {
+    params,
+    maxRedirects: 0,
+    validateStatus: (status) => status >= 200 && status < 400,
+  });
+
+  const location = response.headers?.location;
+  if (!location) {
+    throw new Error("Bullhorn headless auth did not return a redirect URL");
+  }
+
+  const redirectUrl = new URL(location);
+  const code = redirectUrl.searchParams.get("code");
+  if (!code) {
+    throw new Error("Bullhorn headless auth redirect missing code");
+  }
+
+  return code;
+}
+
+function normalizeOauthUrl(url) {
+  if (!url) {
+    return "https://auth.bullhornstaffing.com/oauth";
+  }
+  return url.endsWith("/oauth") ? url : `${url}/oauth`;
 }
 
 async function findCandidateIdByEmail(session, email) {
