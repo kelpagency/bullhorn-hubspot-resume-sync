@@ -515,9 +515,12 @@ function authorizeRequest(headers = {}) {
   }
 
   const providedKey =
-    headers["x-api-key"] || headers["X-API-Key"] || headers["x-api-key".toLowerCase()];
+    headers["resume_sync_api_key"] ||
+    headers["RESUME_SYNC_API_KEY"] ||
+    headers["resume-sync-api-key"] ||
+    headers["Resume-Sync-Api-Key"];
   if (!providedKey) {
-    return { ok: false, message: "Missing API key" };
+    return { ok: false, message: "Missing RESUME_SYNC_API_KEY header" };
   }
 
   if (providedKey !== expectedKey) {
