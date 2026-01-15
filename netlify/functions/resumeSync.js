@@ -485,7 +485,12 @@ async function uploadCandidateFile({
       },
       headers: form.getHeaders(),
     }
-  );
+  ).catch((error) => {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const detail = data ? JSON.stringify(data) : error.message;
+    throw new Error(`Bullhorn file upload failed (${status || "unknown"}): ${detail}`);
+  });
 
   return response.data;
 }
