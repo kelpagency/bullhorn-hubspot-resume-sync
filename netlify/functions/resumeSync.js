@@ -383,10 +383,20 @@ async function findCandidateIdByEmail(session, email) {
     throw new Error("Missing Bullhorn session details");
   }
 
+  const normalizedEmail = String(email || "").trim();
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const escapedEmail = normalizedEmail.replace(/"/g, '\\"');
+  const query = `(email:\"${escapedEmail}\" OR email2:\"${escapedEmail}\" OR email3:\"${escapedEmail}\")`;
+
   const response = await axios.get(`${session.restUrl}search/Candidate`, {
     params: {
       BhRestToken: session.bhRestToken,
-      query: `email:\"${email}\"`,
+      query,
+      fields: "id,email,email2,email3",
+      count: 1,
     },
   });
 
