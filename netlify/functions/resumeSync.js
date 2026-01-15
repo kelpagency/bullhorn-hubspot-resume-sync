@@ -163,7 +163,7 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
   };
 }
 
-async function getBullhornSession() {
+async function getBullhornSession({ retryOnAuthFailure = true } = {}) {
   const clientId = process.env.BULLHORN_CLIENT_ID;
   const clientSecret = process.env.BULLHORN_CLIENT_SECRET;
   const refreshToken = process.env.BULLHORN_REFRESH_TOKEN;
@@ -184,29 +184,56 @@ async function getBullhornSession() {
     tokenParams.redirect_uri = redirectUri;
   }
 
-  const tokenResponse = await axios.post(
-    `${BULLHORN_AUTH_URL}/oauth/token`,
-    new URLSearchParams(tokenParams).toString(),
-    {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    }
-  );
+  let tokenResponse;
+  try {
+    tokenResponse = await axios.post(
+      `${BULLHORN_AUTH_URL}/oauth/token`,
+      new URLSearchParams(tokenParams).toString(),
+      {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      }
+    );
+  } catch (error) {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const detail = data ? JSON.stringify(data) : error.message;
+    throw new Error(`Bullhorn token request failed (${status || "unknown"}): ${detail}`);
+  }
 
   const accessToken = tokenResponse.data?.access_token;
+  const rotatedRefreshToken = tokenResponse.data?.refresh_token;
+
+  if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) {
+    console.warn(
+      "Bullhorn refresh token rotated. Update BULLHORN_REFRESH_TOKEN to avoid auth failures."
+    );
+  }
 
   if (!accessToken) {
     throw new Error("Bullhorn token response missing access_token");
   }
 
-  const loginResponse = await axios.get(
-    `${BULLHORN_REST_BASE_URL}/rest-services/login`,
-    {
-      params: {
-        version: "*",
-        access_token: accessToken,
-      },
+  let loginResponse;
+  try {
+    loginResponse = await axios.get(
+      `${BULLHORN_REST_BASE_URL}/rest-services/login`,
+      {
+        params: {
+          version: "*",
+          access_token: accessToken,
+        },
+      }
+    );
+  } catch (error) {
+    const status = error.response?.status;
+    if (retryOnAuthFailure && (status === 401 || status === 403)) {
+      return getBullhornSession({ retryOnAuthFailure: false });
     }
-  );
+
+    const data = error.response?.data;
+    const detail = data ? JSON.stringify(data) : error.message;
+    throw new Error(`Bullhorn login failed (${status || "unknown"}): ${detail}`);
+  }
 
   return {
     bhRestToken: loginResponse.data?.BhRestToken,
