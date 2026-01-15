@@ -9,6 +9,7 @@ const BULLHORN_AUTH_URL = process.env.BULLHORN_AUTH_URL || "https://auth.bullhor
 const BULLHORN_REST_BASE_URL =
   process.env.BULLHORN_REST_BASE_URL || "https://rest.bullhornstaffing.com";
 const BULLHORN_OAUTH_URL = normalizeOauthUrl(BULLHORN_AUTH_URL);
+const BULLHORN_FILE_TYPE = process.env.BULLHORN_FILE_TYPE || "Talent Resume";
 
 exports.handler = async (event = {}) => {
   if (event.httpMethod && event.httpMethod !== "POST") {
@@ -368,6 +369,9 @@ async function uploadCandidateFile({
   form.append("file", fileBuffer, { filename: fileName, contentType });
   form.append("externalID", `hubspot-contact-${sourceContactId}`);
   form.append("comments", "Resume synced from HubSpot");
+  if (BULLHORN_FILE_TYPE) {
+    form.append("fileType", BULLHORN_FILE_TYPE);
+  }
 
   const response = await axios.post(
     `${session.restUrl}file/Candidate/${candidateId}`,
