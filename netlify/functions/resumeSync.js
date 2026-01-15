@@ -329,8 +329,6 @@ async function getBullhornAuthCodeHeadless({
   username,
   password,
 }) {
-  const maxAttempts = 3;
-  const baseDelayMs = 300;
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
@@ -343,28 +341,16 @@ async function getBullhornAuthCodeHeadless({
     params.set("redirect_uri", redirectUri);
   }
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const response = await axios.get(`${BULLHORN_OAUTH_URL}/authorize`, {
-      params,
-      maxRedirects: 0,
-      validateStatus: (status) => status >= 200 && status < 400,
-    });
+  const startUrl = `${BULLHORN_OAUTH_URL}/authorize?${params.toString()}`;
+  const result = await followRedirectForAuthCode(startUrl);
 
-    const location = response.headers?.location;
-    if (location) {
-      const redirectUrl = new URL(location);
-      const code = redirectUrl.searchParams.get("code");
-      if (code) {
-        return code;
-      }
-    }
-
-    if (attempt < maxAttempts - 1) {
-      await delay(baseDelayMs * (attempt + 1));
-    }
+  if (!result.code) {
+    throw new Error(
+      `Bullhorn headless auth redirect missing code (status ${result.status || "unknown"})`
+    );
   }
 
-  throw new Error("Bullhorn headless auth redirect missing code");
+  return result.code;
 }
 
 function normalizeOauthUrl(url) {
@@ -376,6 +362,34 @@ function normalizeOauthUrl(url) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function followRedirectForAuthCode(startUrl) {
+  const maxRedirects = 5;
+  let currentUrl = startUrl;
+
+  for (let attempt = 0; attempt < maxRedirects; attempt += 1) {
+    const response = await axios.get(currentUrl, {
+      maxRedirects: 0,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+
+    const location = response.headers?.location;
+    if (!location) {
+      return { status: response.status, code: null };
+    }
+
+    const redirectUrl = new URL(location, currentUrl);
+    const code = redirectUrl.searchParams.get("code");
+    if (code) {
+      return { status: response.status, code };
+    }
+
+    currentUrl = redirectUrl.toString();
+    await delay(200);
+  }
+
+  return { status: 0, code: null };
 }
 
 async function findCandidateIdByEmail(session, email) {
