@@ -68,13 +68,12 @@ const exchangeToken = async (code, res, closeServer) => {
 			if (closeServer) {
 				closeServer();
 			}
-			return;
+			return { ok: false, payload };
 		}
 
 		console.log("Bullhorn access_token:", payload.access_token);
 		console.log("Bullhorn refresh_token:", payload.refresh_token);
 		console.log("Save BULLHORN_REFRESH_TOKEN for use in the app.");
-		upsertEnvVar("BULLHORN_AUTH_CODE", code);
 		upsertEnvVar("BULLHORN_ACCESS_TOKEN", payload.access_token);
 		upsertEnvVar("BULLHORN_REFRESH_TOKEN", payload.refresh_token);
 
@@ -85,6 +84,7 @@ const exchangeToken = async (code, res, closeServer) => {
 		if (closeServer) {
 			closeServer();
 		}
+		return { ok: true, payload };
 	} catch (error) {
 		console.error("Token exchange failed:", error);
 		if (res) {
@@ -94,39 +94,20 @@ const exchangeToken = async (code, res, closeServer) => {
 		if (closeServer) {
 			closeServer();
 		}
+		return { ok: false, payload: { error: error.message } };
 	}
 };
+let server;
 
-if (AUTH_CODE) {
-	exchangeToken(AUTH_CODE);
-	return;
+function startManualFlow() {
+	server.listen(PORT, () => {
+		console.log(`Local OAuth listener running on http://localhost:${PORT}`);
+		console.log("Open this URL in a browser to authorize:");
+		console.log(authorizeUrl.toString());
+	});
 }
 
-if (HEADLESS_AUTH) {
-	if (!USERNAME || !PASSWORD) {
-		console.warn(
-			"Headless auth requested, but BULLHORN_USERNAME or BULLHORN_PASSWORD is missing. Falling back to manual flow.",
-		);
-	} else {
-		getAuthCodeViaHeadless(authorizeUrl)
-			.then(async (code) => {
-				if (!code) {
-					console.warn(
-						"Headless auth did not return a code. Falling back to manual flow.",
-					);
-					return;
-				}
-				await exchangeToken(code);
-				process.exit(0);
-			})
-			.catch((error) => {
-				console.error("Headless auth failed:", error);
-				console.warn("Falling back to manual flow.");
-			});
-	}
-}
-
-const server = http.createServer(async (req, res) => {
+server = http.createServer(async (req, res) => {
 	const requestUrl = new URL(req.url, `http://localhost:${PORT}`);
 	const code = requestUrl.searchParams.get("code");
 	const returnedState = requestUrl.searchParams.get("state");
@@ -148,11 +129,48 @@ const server = http.createServer(async (req, res) => {
 	await exchangeToken(code, res, () => server.close());
 });
 
-server.listen(PORT, () => {
-	console.log(`Local OAuth listener running on http://localhost:${PORT}`);
-	console.log("Open this URL in a browser to authorize:");
-	console.log(authorizeUrl.toString());
-});
+async function runAuthFlow() {
+	if (AUTH_CODE) {
+		const tokenResult = await exchangeToken(AUTH_CODE);
+		const invalidGrant = tokenResult?.payload?.error === "invalid_grant";
+		if (!tokenResult?.ok && invalidGrant) {
+			removeEnvVar("BULLHORN_AUTH_CODE");
+			console.warn(
+				"Authorization code invalid/expired. Attempting headless OAuth.",
+			);
+		} else {
+			return;
+		}
+	}
+
+	if (HEADLESS_AUTH) {
+		if (!USERNAME || !PASSWORD) {
+			console.warn(
+				"Headless auth requested, but BULLHORN_USERNAME or BULLHORN_PASSWORD is missing. Falling back to manual flow.",
+			);
+		} else {
+			try {
+				const code = await getAuthCodeViaHeadless(authorizeUrl);
+				if (code) {
+					const tokenResult = await exchangeToken(code);
+					if (tokenResult?.ok) {
+						process.exit(0);
+					}
+				}
+				console.warn(
+					"Headless auth did not return a usable code. Falling back to manual flow.",
+				);
+			} catch (error) {
+				console.error("Headless auth failed:", error);
+				console.warn("Falling back to manual flow.");
+			}
+		}
+	}
+
+	startManualFlow();
+}
+
+runAuthFlow();
 
 function upsertEnvVar(key, value) {
 	if (!value) {
@@ -190,6 +208,26 @@ function upsertEnvVar(key, value) {
 
 	fs.writeFileSync(envPath, `${updated.join("\n")}\n`, "utf8");
 	console.log(`Wrote ${key} to ${envPath}.`);
+}
+
+function removeEnvVar(key) {
+	const envPath = path.resolve(process.cwd(), ".env");
+	if (!fs.existsSync(envPath)) {
+		return;
+	}
+
+	const contents = fs.readFileSync(envPath, "utf8");
+	const lines = contents.split(/\r?\n/);
+	const updated = lines.filter((existing) => {
+		if (!existing || existing.trim().startsWith("#")) {
+			return true;
+		}
+		const [existingKey] = existing.split("=");
+		return !(existingKey && existingKey.trim() === key);
+	});
+
+	fs.writeFileSync(envPath, `${updated.join("\n")}\n`, "utf8");
+	console.log(`Removed ${key} from ${envPath}.`);
 }
 
 function normalizeOauthUrl(url) {

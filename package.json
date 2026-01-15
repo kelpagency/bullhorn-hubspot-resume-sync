@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "bullhorn:oauth:local": "node scripts/bullhorn-local-oauth.js",
-    "bullhorn:refresh:check": "node scripts/bullhorn-refresh-token-check.js"
+    "bullhorn:refresh:check": "node scripts/bullhorn-refresh-token-check.js",
+    "resumeSync:local": "node scripts/resume-sync-local.js"
   },
   "dependencies": {
     "@hubspot/api-client": "^12.1.0",
