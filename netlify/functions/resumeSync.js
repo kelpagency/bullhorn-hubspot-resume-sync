@@ -470,18 +470,16 @@ async function uploadCandidateFile({
 
   const form = new FormData();
   form.append("file", fileBuffer, { filename: fileName, contentType });
-  form.append("externalID", `hubspot-contact-${sourceContactId}`);
-  form.append("comments", "Resume synced from HubSpot");
-  if (BULLHORN_FILE_TYPE) {
-    form.append("fileType", BULLHORN_FILE_TYPE);
-  }
+  const externalId = `hubspot-contact-${sourceContactId}`;
 
-  const response = await axios.post(
-    `${session.restUrl}file/Candidate/${candidateId}`,
+  const response = await axios.put(
+    `${session.restUrl}file/Candidate/${candidateId}/raw`,
     form,
     {
       params: {
         BhRestToken: session.bhRestToken,
+        filetype: BULLHORN_FILE_TYPE,
+        externalID: externalId,
       },
       headers: form.getHeaders(),
     }
