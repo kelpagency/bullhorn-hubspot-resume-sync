@@ -26,6 +26,14 @@ exports.handler = async (event = {}) => {
     return response(405, { error: "Method not allowed" });
   }
 
+  const authResult = authorizeRequest(event.headers || {});
+  if (!authResult.ok) {
+    return {
+      statusCode: 401,
+      body: JSON.stringify({ error: authResult.message }),
+    };
+  }
+
   if (!process.env.HUBSPOT_PRIVATE_APP_TOKEN) {
     return response(500, { error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" });
   }
@@ -498,6 +506,25 @@ function response(statusCode, payload) {
     statusCode,
     body: JSON.stringify(payload),
   };
+}
+
+function authorizeRequest(headers = {}) {
+  const expectedKey = process.env.RESUME_SYNC_API_KEY;
+  if (!expectedKey) {
+    return { ok: false, message: "Missing RESUME_SYNC_API_KEY configuration" };
+  }
+
+  const providedKey =
+    headers["x-api-key"] || headers["X-API-Key"] || headers["x-api-key".toLowerCase()];
+  if (!providedKey) {
+    return { ok: false, message: "Missing API key" };
+  }
+
+  if (providedKey !== expectedKey) {
+    return { ok: false, message: "Invalid API key" };
+  }
+
+  return { ok: true };
 }
 
 function getSelectedCategoryName(properties = {}) {
