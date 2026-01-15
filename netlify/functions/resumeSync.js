@@ -288,6 +288,8 @@ async function getBullhornAuthCodeHeadless({
   username,
   password,
 }) {
+  const maxAttempts = 3;
+  const baseDelayMs = 300;
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
@@ -300,24 +302,28 @@ async function getBullhornAuthCodeHeadless({
     params.set("redirect_uri", redirectUri);
   }
 
-  const response = await axios.get(`${BULLHORN_OAUTH_URL}/authorize`, {
-    params,
-    maxRedirects: 0,
-    validateStatus: (status) => status >= 200 && status < 400,
-  });
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await axios.get(`${BULLHORN_OAUTH_URL}/authorize`, {
+      params,
+      maxRedirects: 0,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
 
-  const location = response.headers?.location;
-  if (!location) {
-    throw new Error("Bullhorn headless auth did not return a redirect URL");
+    const location = response.headers?.location;
+    if (location) {
+      const redirectUrl = new URL(location);
+      const code = redirectUrl.searchParams.get("code");
+      if (code) {
+        return code;
+      }
+    }
+
+    if (attempt < maxAttempts - 1) {
+      await delay(baseDelayMs * (attempt + 1));
+    }
   }
 
-  const redirectUrl = new URL(location);
-  const code = redirectUrl.searchParams.get("code");
-  if (!code) {
-    throw new Error("Bullhorn headless auth redirect missing code");
-  }
-
-  return code;
+  throw new Error("Bullhorn headless auth redirect missing code");
 }
 
 function normalizeOauthUrl(url) {
@@ -325,6 +331,10 @@ function normalizeOauthUrl(url) {
     return "https://auth.bullhornstaffing.com/oauth";
   }
   return url.endsWith("/oauth") ? url : `${url}/oauth`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function findCandidateIdByEmail(session, email) {
