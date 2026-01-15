@@ -10,6 +10,16 @@ const BULLHORN_REST_BASE_URL =
   process.env.BULLHORN_REST_BASE_URL || "https://rest.bullhornstaffing.com";
 const BULLHORN_OAUTH_URL = normalizeOauthUrl(BULLHORN_AUTH_URL);
 const BULLHORN_FILE_TYPE = process.env.BULLHORN_FILE_TYPE || "Talent Resume";
+const RESUME_PROPERTY = "resume";
+const CATEGORY_FIELDS = [
+  "creative",
+  "content",
+  "marketing",
+  "technical",
+  "strategicopertional",
+  "emerging",
+];
+const SYNC_PROPERTIES = new Set([RESUME_PROPERTY, ...CATEGORY_FIELDS]);
 
 exports.handler = async (event = {}) => {
   if (event.httpMethod && event.httpMethod !== "POST") {
@@ -44,7 +54,7 @@ exports.handler = async (event = {}) => {
       continue;
     }
 
-    if (eventPayload.propertyName && eventPayload.propertyName !== "resume") {
+    if (eventPayload.propertyName && !SYNC_PROPERTIES.has(eventPayload.propertyName)) {
       continue;
     }
 
@@ -55,36 +65,16 @@ exports.handler = async (event = {}) => {
 
     const contact = await hubspotClient.crm.contacts.basicApi.getById(
       contactId,
-      ["email", "resume"]
+      ["email", RESUME_PROPERTY, ...CATEGORY_FIELDS]
     );
     const email = contact.properties?.email;
-    const resumeValue = contact.properties?.resume;
+    const resumeValue = contact.properties?.[RESUME_PROPERTY];
+    const categoryName = getSelectedCategoryName(contact.properties);
 
-    if (!email || !resumeValue) {
-      results.push({ contactId, skipped: true, reason: "Missing email or resume" });
+    if (!email) {
+      results.push({ contactId, skipped: true, reason: "Missing email" });
       continue;
     }
-
-    const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
-    const resolved = await resolveHubSpotFile({
-      fileId,
-      fileUrl,
-      fileName,
-      accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
-    });
-
-    if (!resolved.url) {
-      results.push({ contactId, skipped: true, reason: "Resume file not found" });
-      continue;
-    }
-
-    const fileResponse = await axios.get(resolved.url, {
-      responseType: "arraybuffer",
-    });
-
-    const fileBuffer = Buffer.from(fileResponse.data);
-    const contentType =
-      fileResponse.headers["content-type"] || "application/octet-stream";
 
     const bullhornSession = await getBullhornSession();
     const candidateId = await findCandidateIdByEmail(bullhornSession, email);
@@ -94,16 +84,66 @@ exports.handler = async (event = {}) => {
       continue;
     }
 
-    const uploadResult = await uploadCandidateFile({
-      session: bullhornSession,
-      candidateId,
-      fileBuffer,
-      fileName: resolved.fileName || `resume-${contactId}`,
-      contentType,
-      sourceContactId: contactId,
-    });
+    const result = { contactId, candidateId };
 
-    results.push({ contactId, candidateId, uploadResult });
+    if (categoryName) {
+      const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
+      if (categoryId) {
+        const updateResult = await updateCandidateCategory({
+          session: bullhornSession,
+          candidateId,
+          categoryId,
+        });
+        result.categoryName = categoryName;
+        result.categoryId = categoryId;
+        result.categoryUpdate = updateResult;
+      } else {
+        result.categoryName = categoryName;
+        result.categoryUpdate = { skipped: true, reason: "Category not found" };
+      }
+    }
+
+    if (eventPayload.propertyName === RESUME_PROPERTY) {
+      if (!resumeValue) {
+        result.resumeUpload = { skipped: true, reason: "Missing resume" };
+      } else {
+        const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
+        const resolved = await resolveHubSpotFile({
+          fileId,
+          fileUrl,
+          fileName,
+          accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
+        });
+
+        if (!resolved.url) {
+          result.resumeUpload = { skipped: true, reason: "Resume file not found" };
+        } else {
+          const fileResponse = await axios.get(resolved.url, {
+            responseType: "arraybuffer",
+          });
+
+          const fileBuffer = Buffer.from(fileResponse.data);
+          const contentType =
+            fileResponse.headers["content-type"] || "application/octet-stream";
+
+          result.resumeUpload = await uploadCandidateFile({
+            session: bullhornSession,
+            candidateId,
+            fileBuffer,
+            fileName: resolved.fileName || `resume-${contactId}`,
+            contentType,
+            sourceContactId: contactId,
+          });
+        }
+      }
+    }
+
+    if (!result.categoryUpdate && !result.resumeUpload) {
+      result.skipped = true;
+      result.reason = "No category or resume updates to apply";
+    }
+
+    results.push(result);
   }
 
   return response(200, { results });
@@ -353,6 +393,45 @@ async function findCandidateIdByEmail(session, email) {
   return response.data?.data?.[0]?.id || null;
 }
 
+async function findCategoryIdByName(session, name) {
+  if (!session?.restUrl || !session?.bhRestToken) {
+    throw new Error("Missing Bullhorn session details");
+  }
+
+  const response = await axios.get(`${session.restUrl}search/Category`, {
+    params: {
+      BhRestToken: session.bhRestToken,
+      query: `name:\"${name}\"`,
+      fields: "id,name",
+    },
+  });
+
+  return response.data?.data?.[0]?.id || null;
+}
+
+async function updateCandidateCategory({ session, candidateId, categoryId }) {
+  if (!session?.restUrl || !session?.bhRestToken) {
+    throw new Error("Missing Bullhorn session details");
+  }
+
+  const response = await axios.post(
+    `${session.restUrl}entity/Candidate/${candidateId}`,
+    {
+      categoryID: categoryId,
+    },
+    {
+      params: {
+        BhRestToken: session.bhRestToken,
+      },
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  return response.data;
+}
+
 async function uploadCandidateFile({
   session,
   candidateId,
@@ -392,4 +471,14 @@ function response(statusCode, payload) {
     statusCode,
     body: JSON.stringify(payload),
   };
+}
+
+function getSelectedCategoryName(properties = {}) {
+  for (const field of CATEGORY_FIELDS) {
+    const value = properties[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }
