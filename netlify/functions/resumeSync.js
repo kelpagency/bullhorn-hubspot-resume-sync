@@ -86,6 +86,15 @@ exports.handler = async (event = {}) => {
       const email = contact.properties?.email;
       const resumeValue = contact.properties?.[RESUME_PROPERTY];
       const categoryName = getSelectedCategoryName(contact.properties);
+      const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
+        acc[field] = contact.properties?.[field];
+        return acc;
+      }, {});
+      console.log("resumeSync: expertise fields", {
+        contactId,
+        propertyName: eventPayload.propertyName,
+        expertiseFields,
+      });
 
       if (!email) {
         results.push({ contactId, skipped: true, reason: "Missing email" });
