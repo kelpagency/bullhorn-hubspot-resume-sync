@@ -58,138 +58,159 @@ exports.handler = async (event = {}) => {
 
   const results = [];
   for (const eventPayload of events) {
-    if (eventPayload.subscriptionType !== "object.propertyChange") {
-      continue;
-    }
+    const eventContext = {
+      subscriptionType: eventPayload?.subscriptionType,
+      propertyName: eventPayload?.propertyName,
+      objectId: eventPayload?.objectId,
+    };
+    console.log("resumeSync: received event", eventContext);
 
-    if (eventPayload.propertyName && !SYNC_PROPERTIES.has(eventPayload.propertyName)) {
-      continue;
-    }
-
-    const contactId = eventPayload.objectId;
-    if (!contactId) {
-      continue;
-    }
-
-    const contact = await hubspotClient.crm.contacts.basicApi.getById(
-      contactId,
-      ["email", RESUME_PROPERTY, ...CATEGORY_FIELDS]
-    );
-    const email = contact.properties?.email;
-    const resumeValue = contact.properties?.[RESUME_PROPERTY];
-    const categoryName = getSelectedCategoryName(contact.properties);
-
-    if (!email) {
-      results.push({ contactId, skipped: true, reason: "Missing email" });
-      continue;
-    }
-
-    const bullhornSession = await getBullhornSession();
-    const candidateId = await findCandidateIdByEmail(bullhornSession, email);
-
-    if (!candidateId) {
-      results.push({ contactId, skipped: true, reason: "Candidate not found" });
-      continue;
-    }
-
-    const result = { contactId, candidateId };
-    console.log("resumeSync: processing contact", { contactId, candidateId });
-
-    if (categoryName && CATEGORY_FIELDS.includes(eventPayload.propertyName)) {
-      try {
-        const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
-        if (categoryId) {
-          const updateResult = await updateCandidateCategory({
-            session: bullhornSession,
-            candidateId,
-            categoryId,
-          });
-          result.categoryName = categoryName;
-          result.categoryId = categoryId;
-          result.categoryUpdate = updateResult;
-        } else {
-          result.categoryName = categoryName;
-          result.categoryUpdate = { skipped: true, reason: "Category not found" };
-        }
-      } catch (error) {
-        console.error("resumeSync: Bullhorn category update failed", {
-          contactId,
-          candidateId,
-          categoryName,
-          message: error.message,
-          status: error.response?.status,
-          data: error.response?.data,
-        });
-        result.categoryName = categoryName;
-        result.categoryUpdate = {
-          skipped: true,
-          reason: "Category update failed",
-          error: error.message,
-        };
+    try {
+      if (eventPayload.subscriptionType !== "object.propertyChange") {
+        continue;
       }
-    }
 
-    if (eventPayload.propertyName === RESUME_PROPERTY) {
-      if (!resumeValue) {
-        result.resumeUpload = { skipped: true, reason: "Missing resume" };
-      } else {
-        const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
-        const resolved = await resolveHubSpotFile({
-          fileId,
-          fileUrl,
-          fileName,
-          accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
-        });
+      if (eventPayload.propertyName && !SYNC_PROPERTIES.has(eventPayload.propertyName)) {
+        continue;
+      }
 
-        if (!resolved.url) {
-          result.resumeUpload = { skipped: true, reason: "Resume file not found" };
-        } else {
-          console.log("resumeSync: resolved HubSpot file", {
+      const contactId = eventPayload.objectId;
+      if (!contactId) {
+        continue;
+      }
+
+      const contact = await hubspotClient.crm.contacts.basicApi.getById(
+        contactId,
+        ["email", RESUME_PROPERTY, ...CATEGORY_FIELDS]
+      );
+      const email = contact.properties?.email;
+      const resumeValue = contact.properties?.[RESUME_PROPERTY];
+      const categoryName = getSelectedCategoryName(contact.properties);
+
+      if (!email) {
+        results.push({ contactId, skipped: true, reason: "Missing email" });
+        continue;
+      }
+
+      const bullhornSession = await getBullhornSession();
+      const candidateId = await findCandidateIdByEmail(bullhornSession, email);
+
+      if (!candidateId) {
+        results.push({ contactId, skipped: true, reason: "Candidate not found" });
+        continue;
+      }
+
+      const result = { contactId, candidateId };
+      console.log("resumeSync: processing contact", { contactId, candidateId });
+
+      if (categoryName && CATEGORY_FIELDS.includes(eventPayload.propertyName)) {
+        try {
+          const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
+          if (categoryId) {
+            const updateResult = await updateCandidateCategory({
+              session: bullhornSession,
+              candidateId,
+              categoryId,
+            });
+            result.categoryName = categoryName;
+            result.categoryId = categoryId;
+            result.categoryUpdate = updateResult;
+          } else {
+            result.categoryName = categoryName;
+            result.categoryUpdate = { skipped: true, reason: "Category not found" };
+          }
+        } catch (error) {
+          console.error("resumeSync: Bullhorn category update failed", {
             contactId,
             candidateId,
-            fileId,
-            fileName: resolved.fileName || fileName,
-            fileUrl: resolved.url,
+            categoryName,
+            message: error.message,
+            status: error.response?.status,
+            data: error.response?.data,
           });
-          const fileResponse = await axios.get(resolved.url, {
-            responseType: "arraybuffer",
-          });
-
-          const fileBuffer = Buffer.from(fileResponse.data);
-          const contentType =
-            fileResponse.headers["content-type"] || "application/octet-stream";
-          const uploadMeta = {
-            candidateId,
-            fileName: resolved.fileName || `resume-${contactId}`,
-            contentType,
-            fileType: BULLHORN_FILE_TYPE,
-            externalId: `hubspot-contact-${contactId}`,
+          result.categoryName = categoryName;
+          result.categoryUpdate = {
+            skipped: true,
+            reason: "Category update failed",
+            error: error.message,
           };
-          console.log("resumeSync: uploading Bullhorn file", uploadMeta);
-
-          result.resumeUpload = await uploadCandidateFile({
-            session: bullhornSession,
-            candidateId,
-            fileBuffer,
-            fileName: resolved.fileName || `resume-${contactId}`,
-            contentType,
-            sourceContactId: contactId,
-          });
-          result.resumeUploadMeta = uploadMeta;
-          console.log("resumeSync: Bullhorn upload response", {
-            candidateId,
-            resumeUpload: result.resumeUpload,
-          });
         }
       }
-    }
 
-    if (!result.categoryUpdate && !result.resumeUpload) {
-      result.skipped = true;
-      result.reason = "No category or resume updates to apply";
-    }
+      if (eventPayload.propertyName === RESUME_PROPERTY) {
+        if (!resumeValue) {
+          result.resumeUpload = { skipped: true, reason: "Missing resume" };
+        } else {
+          const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
+          const resolved = await resolveHubSpotFile({
+            fileId,
+            fileUrl,
+            fileName,
+            accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
+          });
 
-    results.push(result);
+          if (!resolved.url) {
+            result.resumeUpload = { skipped: true, reason: "Resume file not found" };
+          } else {
+            console.log("resumeSync: resolved HubSpot file", {
+              contactId,
+              candidateId,
+              fileId,
+              fileName: resolved.fileName || fileName,
+              fileUrl: resolved.url,
+            });
+            const fileResponse = await axios.get(resolved.url, {
+              responseType: "arraybuffer",
+            });
+
+            const fileBuffer = Buffer.from(fileResponse.data);
+            const contentType =
+              fileResponse.headers["content-type"] || "application/octet-stream";
+            const uploadMeta = {
+              candidateId,
+              fileName: resolved.fileName || `resume-${contactId}`,
+              contentType,
+              fileType: BULLHORN_FILE_TYPE,
+              externalId: `hubspot-contact-${contactId}`,
+            };
+            console.log("resumeSync: uploading Bullhorn file", uploadMeta);
+
+            result.resumeUpload = await uploadCandidateFile({
+              session: bullhornSession,
+              candidateId,
+              fileBuffer,
+              fileName: resolved.fileName || `resume-${contactId}`,
+              contentType,
+              sourceContactId: contactId,
+            });
+            result.resumeUploadMeta = uploadMeta;
+            console.log("resumeSync: Bullhorn upload response", {
+              candidateId,
+              resumeUpload: result.resumeUpload,
+            });
+          }
+        }
+      }
+
+      if (!result.categoryUpdate && !result.resumeUpload) {
+        result.skipped = true;
+        result.reason = "No category or resume updates to apply";
+      }
+
+      results.push(result);
+    } catch (error) {
+      console.error("resumeSync: event processing failed", {
+        ...eventContext,
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
+      results.push({
+        ...eventContext,
+        error: error.message,
+        status: error.response?.status,
+      });
+    }
   }
 
   return response(200, { results });
