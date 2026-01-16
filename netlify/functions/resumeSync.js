@@ -95,20 +95,37 @@ exports.handler = async (event = {}) => {
     const result = { contactId, candidateId };
     console.log("resumeSync: processing contact", { contactId, candidateId });
 
-    if (categoryName) {
-      const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
-      if (categoryId) {
-        const updateResult = await updateCandidateCategory({
-          session: bullhornSession,
+    if (categoryName && CATEGORY_FIELDS.includes(eventPayload.propertyName)) {
+      try {
+        const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
+        if (categoryId) {
+          const updateResult = await updateCandidateCategory({
+            session: bullhornSession,
+            candidateId,
+            categoryId,
+          });
+          result.categoryName = categoryName;
+          result.categoryId = categoryId;
+          result.categoryUpdate = updateResult;
+        } else {
+          result.categoryName = categoryName;
+          result.categoryUpdate = { skipped: true, reason: "Category not found" };
+        }
+      } catch (error) {
+        console.error("resumeSync: Bullhorn category update failed", {
+          contactId,
           candidateId,
-          categoryId,
+          categoryName,
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data,
         });
         result.categoryName = categoryName;
-        result.categoryId = categoryId;
-        result.categoryUpdate = updateResult;
-      } else {
-        result.categoryName = categoryName;
-        result.categoryUpdate = { skipped: true, reason: "Category not found" };
+        result.categoryUpdate = {
+          skipped: true,
+          reason: "Category update failed",
+          error: error.message,
+        };
       }
     }
 
