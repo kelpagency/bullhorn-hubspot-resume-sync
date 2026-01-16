@@ -91,7 +91,9 @@ exports.handler = async (event = {}) => {
 			);
 			const email = contact.properties?.email;
 			const resumeValue = contact.properties?.[RESUME_PROPERTY];
-			const categoryName = getSelectedCategoryName(contact.properties);
+			const categorySelection = getSelectedCategoryInfo(contact.properties);
+			const categoryName = categorySelection?.value || null;
+			const categoryField = categorySelection?.field || null;
 			const categoryIdValue = resolveCategoryIdValue(categoryName);
 			const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
 				acc[field] = contact.properties?.[field];
@@ -100,6 +102,8 @@ exports.handler = async (event = {}) => {
 			console.log("resumeSync: expertise fields", {
 				contactId,
 				propertyName: eventPayload.propertyName,
+				selectedField: categoryField,
+				selectedValue: categoryName,
 				expertiseFields,
 			});
 
@@ -123,41 +127,52 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-			if (categoryIdValue || categoryName) {
-				try {
-					const categoryId =
-						categoryIdValue ||
-						(await findCategoryIdByName(bullhornSession, categoryName));
-					if (categoryId) {
-						const updateResult = await updateCandidateCategory({
-							session: bullhornSession,
+				if (categoryIdValue || categoryName) {
+					try {
+						const categoryId =
+							categoryIdValue ||
+							(await findCategoryIdByName(bullhornSession, categoryName));
+						if (categoryId) {
+							const updateResult = await updateCandidateCategory({
+								session: bullhornSession,
+								candidateId,
+								categoryId,
+							});
+							result.categoryName = categoryName;
+							result.categoryField = categoryField;
+							result.categoryId = categoryId;
+							result.categoryUpdate = updateResult;
+							console.log("resumeSync: Bullhorn category update response", {
+								candidateId,
+								categoryId,
+								categoryField,
+								categoryValue: categoryName,
+								categoryUpdate: updateResult,
+							});
+						} else {
+							result.categoryName = categoryName;
+							result.categoryField = categoryField;
+							result.categoryUpdate = {
+								skipped: true,
+								reason: "Category not found",
+							};
+						}
+					} catch (error) {
+						console.error("resumeSync: Bullhorn category update failed", {
+							contactId,
 							candidateId,
-							categoryId,
+							categoryName,
+							categoryField,
+							message: error.message,
+							status: error.response?.status,
+							data: error.response?.data,
 						});
 						result.categoryName = categoryName;
-						result.categoryId = categoryId;
-						result.categoryUpdate = updateResult;
-					} else {
-						result.categoryName = categoryName;
+						result.categoryField = categoryField;
 						result.categoryUpdate = {
 							skipped: true,
-							reason: "Category not found",
-						};
-					}
-				} catch (error) {
-					console.error("resumeSync: Bullhorn category update failed", {
-						contactId,
-						candidateId,
-						categoryName,
-						message: error.message,
-						status: error.response?.status,
-						data: error.response?.data,
-					});
-					result.categoryName = categoryName;
-					result.categoryUpdate = {
-						skipped: true,
-						reason: "Category update failed",
-						error: error.message,
+							reason: "Category update failed",
+							error: error.message,
 					};
 				}
 			}
@@ -755,11 +770,11 @@ function authorizeRequest(headers = {}) {
 	return { ok: true };
 }
 
-function getSelectedCategoryName(properties = {}) {
+function getSelectedCategoryInfo(properties = {}) {
 	for (const field of CATEGORY_FIELDS) {
 		const value = properties[field];
 		if (typeof value === "string" && value.trim()) {
-			return value.trim();
+			return { field, value: value.trim() };
 		}
 	}
 	return null;
