@@ -162,17 +162,22 @@ exports.handler = async (event = {}) => {
 				}
 			}
 
-			if (eventPayload.propertyName === RESUME_PROPERTY) {
-				if (!resumeValue) {
-					result.resumeUpload = { skipped: true, reason: "Missing resume" };
-				} else {
-					const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
-					const resolved = await resolveHubSpotFile({
-						fileId,
-						fileUrl,
-						fileName,
-						accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
-					});
+				if (eventPayload.propertyName === RESUME_PROPERTY) {
+					if (!resumeValue) {
+						result.resumeUpload = { skipped: true, reason: "Missing resume" };
+					} else {
+						const candidateName = await getCandidateName(
+							bullhornSession,
+							candidateId,
+						);
+						result.candidateName = candidateName;
+						const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
+						const resolved = await resolveHubSpotFile({
+							fileId,
+							fileUrl,
+							fileName,
+							accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
+						});
 
 					if (!resolved.url) {
 						result.resumeUpload = {
@@ -191,10 +196,19 @@ exports.handler = async (event = {}) => {
 							responseType: "arraybuffer",
 						});
 
-						const fileBuffer = Buffer.from(fileResponse.data);
-						const contentType =
-							fileResponse.headers["content-type"] ||
-							"application/octet-stream";
+							const fileBuffer = Buffer.from(fileResponse.data);
+							const contentType =
+								fileResponse.headers["content-type"] ||
+								"application/octet-stream";
+						const uploadFileName = buildCandidateResumeFileName(
+							candidateName,
+							candidateId,
+						);
+						const fileType = resolveBullhornFileType({
+							fileName: resolved.fileName || fileName,
+							fileUrl: resolved.url,
+							contentType,
+						});
 						if (contentType.includes("text/html")) {
 							console.warn("resumeSync: HubSpot file fetch returned HTML", {
 								contactId,
@@ -202,30 +216,31 @@ exports.handler = async (event = {}) => {
 								fileId,
 								fileUrl: resolved.url,
 								contentType,
-							});
-							result.resumeUpload = {
-								skipped: true,
-								reason: "HubSpot file fetch returned HTML",
-								contentType,
-							};
-							results.push(result);
-							continue;
+								});
+								result.resumeUpload = {
+									skipped: true,
+									reason: "HubSpot file fetch returned HTML",
+									contentType,
+								};
+								results.push(result);
+								continue;
 						}
 						const uploadMeta = {
 							candidateId,
-							fileName: resolved.fileName || `resume-${contactId}`,
+							fileName: uploadFileName,
 							contentType,
-							fileType: BULLHORN_FILE_TYPE,
+							fileType,
 							externalId: `hubspot-contact-${contactId}`,
 						};
 						console.log("resumeSync: uploading Bullhorn file", uploadMeta);
 
-						result.resumeUpload = await uploadCandidateFile({
+							result.resumeUpload = await uploadCandidateFile({
 							session: bullhornSession,
 							candidateId,
 							fileBuffer,
-							fileName: resolved.fileName || `resume-${contactId}`,
+							fileName: uploadFileName,
 							contentType,
+							fileType,
 							sourceContactId: contactId,
 						});
 						result.resumeUploadMeta = uploadMeta;
@@ -585,6 +600,41 @@ async function findCategoryIdByName(session, name) {
 	return response.data?.data?.[0]?.id || null;
 }
 
+async function getCandidateName(session, candidateId) {
+	if (!session?.restUrl || !session?.bhRestToken) {
+		throw new Error("Missing Bullhorn session details");
+	}
+
+	if (!candidateId) {
+		return null;
+	}
+
+	try {
+		const response = await axios.get(
+			`${session.restUrl}entity/Candidate/${candidateId}`,
+			{
+				params: {
+					BhRestToken: session.bhRestToken,
+					fields: "firstName,lastName",
+				},
+			},
+		);
+
+		const firstName = response.data?.data?.firstName || "";
+		const lastName = response.data?.data?.lastName || "";
+		const fullName = `${firstName} ${lastName}`.trim();
+		return fullName || null;
+	} catch (error) {
+		console.warn("resumeSync: failed to load Bullhorn candidate name", {
+			candidateId,
+			message: error.message,
+			status: error.response?.status,
+			data: error.response?.data,
+		});
+		return null;
+	}
+}
+
 async function updateCandidateCategory({ session, candidateId, categoryId }) {
 	if (!session?.restUrl || !session?.bhRestToken) {
 		throw new Error("Missing Bullhorn session details");
@@ -614,6 +664,7 @@ async function uploadCandidateFile({
 	fileBuffer,
 	fileName,
 	contentType,
+	fileType,
 	sourceContactId,
 }) {
 	if (!session?.restUrl || !session?.bhRestToken) {
@@ -628,7 +679,7 @@ async function uploadCandidateFile({
 		.put(`${session.restUrl}file/Candidate/${candidateId}/raw`, form, {
 			params: {
 				BhRestToken: session.bhRestToken,
-				filetype: BULLHORN_FILE_TYPE,
+				filetype: fileType || BULLHORN_FILE_TYPE,
 				externalID: externalId,
 			},
 			headers: form.getHeaders(),
@@ -702,4 +753,78 @@ function extractHubSpotFileId(fileUrl) {
 
 	const match = fileUrl.match(/\/uploaded-files\/signed-url-redirect\/(\d+)/);
 	return match ? match[1] : null;
+}
+
+function buildCandidateResumeFileName(candidateName, candidateId) {
+	const safeName = sanitizeFileNamePart(candidateName);
+	const namePart = safeName || `candidate-${candidateId || "unknown"}`;
+	return `resume ${namePart}`;
+}
+
+function sanitizeFileNamePart(value) {
+	if (!value) {
+		return "";
+	}
+
+	const normalized = String(value)
+		.replace(/[^A-Za-z0-9 _-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+
+	return normalized.slice(0, 120);
+}
+
+function resolveBullhornFileType({ fileName, fileUrl, contentType }) {
+	const nameExtension = extractFileExtension(fileName);
+	if (nameExtension) {
+		return nameExtension;
+	}
+
+	const urlExtension = extractFileExtensionFromUrl(fileUrl);
+	if (urlExtension) {
+		return urlExtension;
+	}
+
+	const contentTypeExtension = mapContentTypeToExtension(contentType);
+	if (contentTypeExtension) {
+		return contentTypeExtension;
+	}
+
+	return BULLHORN_FILE_TYPE;
+}
+
+function extractFileExtension(fileName) {
+	if (!fileName || typeof fileName !== "string") {
+		return "";
+	}
+
+	const match = fileName.trim().match(/\.([A-Za-z0-9]{1,8})$/);
+	return match ? match[1].toLowerCase() : "";
+}
+
+function extractFileExtensionFromUrl(fileUrl) {
+	if (!fileUrl || typeof fileUrl !== "string") {
+		return "";
+	}
+
+	const path = fileUrl.split("?")[0] || "";
+	const match = path.match(/\.([A-Za-z0-9]{1,8})$/);
+	return match ? match[1].toLowerCase() : "";
+}
+
+function mapContentTypeToExtension(contentType) {
+	if (!contentType || typeof contentType !== "string") {
+		return "";
+	}
+
+	const lowerType = contentType.toLowerCase();
+	const mapping = {
+		"application/pdf": "pdf",
+		"application/msword": "doc",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+		"application/rtf": "rtf",
+		"text/plain": "txt",
+	};
+
+	return mapping[lowerType] || "";
 }
