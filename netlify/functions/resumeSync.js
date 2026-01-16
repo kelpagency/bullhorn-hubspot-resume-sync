@@ -92,6 +92,7 @@ exports.handler = async (event = {}) => {
 			const email = contact.properties?.email;
 			const resumeValue = contact.properties?.[RESUME_PROPERTY];
 			const categoryName = getSelectedCategoryName(contact.properties);
+			const categoryIdValue = resolveCategoryIdValue(categoryName);
 			const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
 				acc[field] = contact.properties?.[field];
 				return acc;
@@ -122,12 +123,11 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-			if (categoryName) {
+			if (categoryIdValue || categoryName) {
 				try {
-					const categoryId = await findCategoryIdByName(
-						bullhornSession,
-						categoryName,
-					);
+					const categoryId =
+						categoryIdValue ||
+						(await findCategoryIdByName(bullhornSession, categoryName));
 					if (categoryId) {
 						const updateResult = await updateCandidateCategory({
 							session: bullhornSession,
@@ -588,16 +588,47 @@ async function findCategoryIdByName(session, name) {
 	}
 
 	const escapedName = escapeBullhornWhereValue(normalizedName);
-	const response = await axios.get(`${session.restUrl}query/Category`, {
-		params: {
-			BhRestToken: session.bhRestToken,
-			where: `name="${escapedName}"`,
-			fields: "id,name",
-			count: 1,
-		},
-	});
+	try {
+		const response = await axios.get(`${session.restUrl}query/Category`, {
+			params: {
+				BhRestToken: session.bhRestToken,
+				where: `name="${escapedName}"`,
+				fields: "id,name",
+				count: 1,
+			},
+		});
 
-	return response.data?.data?.[0]?.id || null;
+		return response.data?.data?.[0]?.id || null;
+	} catch (error) {
+		const errorKey = error.response?.data?.errorMessageKey;
+		if (errorKey !== "errors.notValidFieldName") {
+			throw error;
+		}
+
+		console.warn("resumeSync: category name query failed, falling back to list", {
+			categoryName: normalizedName,
+			message: error.message,
+			status: error.response?.status,
+			data: error.response?.data,
+		});
+
+		const listResponse = await axios.get(`${session.restUrl}query/Category`, {
+			params: {
+				BhRestToken: session.bhRestToken,
+				where: "id>0",
+				fields: "id,name",
+				count: 200,
+			},
+		});
+
+		const target = normalizedName.toLowerCase();
+		const match = listResponse.data?.data?.find((category) => {
+			const categoryName = String(category?.name || "").trim().toLowerCase();
+			return categoryName === target;
+		});
+
+		return match?.id || null;
+	}
 }
 
 async function getCandidateName(session, candidateId) {
@@ -751,6 +782,23 @@ function escapeBullhornWhereValue(value) {
 	}
 
 	return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function resolveCategoryIdValue(value) {
+	if (value === null || value === undefined) {
+		return null;
+	}
+
+	const trimmed = String(value).trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	if (!/^\d+$/.test(trimmed)) {
+		return null;
+	}
+
+	return Number(trimmed);
 }
 
 function extractHubSpotFileId(fileUrl) {
