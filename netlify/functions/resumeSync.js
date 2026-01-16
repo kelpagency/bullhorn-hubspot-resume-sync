@@ -93,6 +93,7 @@ exports.handler = async (event = {}) => {
     }
 
     const result = { contactId, candidateId };
+    console.log("resumeSync: processing contact", { contactId, candidateId });
 
     if (categoryName) {
       const categoryId = await findCategoryIdByName(bullhornSession, categoryName);
@@ -126,6 +127,13 @@ exports.handler = async (event = {}) => {
         if (!resolved.url) {
           result.resumeUpload = { skipped: true, reason: "Resume file not found" };
         } else {
+          console.log("resumeSync: resolved HubSpot file", {
+            contactId,
+            candidateId,
+            fileId,
+            fileName: resolved.fileName || fileName,
+            fileUrl: resolved.url,
+          });
           const fileResponse = await axios.get(resolved.url, {
             responseType: "arraybuffer",
           });
@@ -133,6 +141,14 @@ exports.handler = async (event = {}) => {
           const fileBuffer = Buffer.from(fileResponse.data);
           const contentType =
             fileResponse.headers["content-type"] || "application/octet-stream";
+          const uploadMeta = {
+            candidateId,
+            fileName: resolved.fileName || `resume-${contactId}`,
+            contentType,
+            fileType: BULLHORN_FILE_TYPE,
+            externalId: `hubspot-contact-${contactId}`,
+          };
+          console.log("resumeSync: uploading Bullhorn file", uploadMeta);
 
           result.resumeUpload = await uploadCandidateFile({
             session: bullhornSession,
@@ -141,6 +157,11 @@ exports.handler = async (event = {}) => {
             fileName: resolved.fileName || `resume-${contactId}`,
             contentType,
             sourceContactId: contactId,
+          });
+          result.resumeUploadMeta = uploadMeta;
+          console.log("resumeSync: Bullhorn upload response", {
+            candidateId,
+            resumeUpload: result.resumeUpload,
           });
         }
       }
