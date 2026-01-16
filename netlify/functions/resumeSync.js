@@ -431,7 +431,7 @@ async function findCandidateIdByEmail(session, email) {
     return null;
   }
 
-  const escapedEmail = normalizedEmail.replace(/"/g, '\\"');
+  const escapedEmail = escapeBullhornQueryValue(normalizedEmail);
   const query = `(email:\"${escapedEmail}\" OR email2:\"${escapedEmail}\" OR email3:\"${escapedEmail}\")`;
 
   const response = await axios.get(`${session.restUrl}search/Candidate`, {
@@ -451,10 +451,15 @@ async function findCategoryIdByName(session, name) {
     throw new Error("Missing Bullhorn session details");
   }
 
+  const escapedName = escapeBullhornQueryValue(String(name || "").trim());
+  if (!escapedName) {
+    return null;
+  }
+
   const response = await axios.get(`${session.restUrl}search/Category`, {
     params: {
       BhRestToken: session.bhRestToken,
-      query: `name:\"${name}\"`,
+      query: `name:\"${escapedName}\"`,
       fields: "id,name",
     },
   });
@@ -559,4 +564,15 @@ function getSelectedCategoryName(properties = {}) {
     }
   }
   return null;
+}
+
+function escapeBullhornQueryValue(value) {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .replace(/[\\+\-!(){}\[\]^"~*?:/]/g, "\\$&")
+    .replace(/&&/g, "\\&&")
+    .replace(/\|\|/g, "\\||");
 }
