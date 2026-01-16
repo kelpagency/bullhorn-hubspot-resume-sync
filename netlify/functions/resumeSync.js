@@ -195,6 +195,22 @@ exports.handler = async (event = {}) => {
 						const contentType =
 							fileResponse.headers["content-type"] ||
 							"application/octet-stream";
+						if (contentType.includes("text/html")) {
+							console.warn("resumeSync: HubSpot file fetch returned HTML", {
+								contactId,
+								candidateId,
+								fileId,
+								fileUrl: resolved.url,
+								contentType,
+							});
+							result.resumeUpload = {
+								skipped: true,
+								reason: "HubSpot file fetch returned HTML",
+								contentType,
+							};
+							results.push(result);
+							continue;
+						}
 						const uploadMeta = {
 							candidateId,
 							fileName: resolved.fileName || `resume-${contactId}`,
@@ -281,7 +297,7 @@ function parseResumeValue(resumeValue) {
 }
 
 async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
-	if (fileUrl) {
+	if (!fileId && fileUrl) {
 		return { url: fileUrl, fileName };
 	}
 
@@ -289,17 +305,33 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
 		return { url: null, fileName };
 	}
 
+	const headers = {
+		Authorization: `Bearer ${accessToken}`,
+	};
+
 	const response = await axios.get(
 		`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}`,
-		{
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-			},
-		},
+		{ headers },
 	);
 
+	let signedUrl = null;
+	try {
+		const signedResponse = await axios.get(
+			`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}/signed-url`,
+			{ headers },
+		);
+		signedUrl = signedResponse.data?.url || null;
+	} catch (error) {
+		console.warn("resumeSync: failed to fetch HubSpot signed url", {
+			fileId,
+			message: error.message,
+			status: error.response?.status,
+			data: error.response?.data,
+		});
+	}
+
 	return {
-		url: response.data?.url || response.data?.downloadUrl || null,
+		url: signedUrl || response.data?.url || response.data?.downloadUrl || fileUrl || null,
 		fileName: response.data?.name || fileName,
 	};
 }
