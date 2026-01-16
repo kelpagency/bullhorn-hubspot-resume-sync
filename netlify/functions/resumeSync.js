@@ -297,11 +297,19 @@ function parseResumeValue(resumeValue) {
 }
 
 async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
-	if (!fileId && fileUrl) {
+	const extractedFileId = fileId || extractHubSpotFileId(fileUrl);
+	if (fileUrl && !fileId && extractedFileId) {
+		console.log("resumeSync: extracted HubSpot file id from url", {
+			fileId: extractedFileId,
+			fileUrl,
+		});
+	}
+
+	if (!extractedFileId && fileUrl) {
 		return { url: fileUrl, fileName };
 	}
 
-	if (!fileId) {
+	if (!extractedFileId) {
 		return { url: null, fileName };
 	}
 
@@ -310,20 +318,20 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
 	};
 
 	const response = await axios.get(
-		`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}`,
+		`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${extractedFileId}`,
 		{ headers },
 	);
 
 	let signedUrl = null;
 	try {
 		const signedResponse = await axios.get(
-			`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${fileId}/signed-url`,
+			`${HUBSPOT_FILES_BASE_URL}/files/v3/files/${extractedFileId}/signed-url`,
 			{ headers },
 		);
 		signedUrl = signedResponse.data?.url || null;
 	} catch (error) {
 		console.warn("resumeSync: failed to fetch HubSpot signed url", {
-			fileId,
+			fileId: extractedFileId,
 			message: error.message,
 			status: error.response?.status,
 			data: error.response?.data,
@@ -685,4 +693,13 @@ function escapeBullhornQueryValue(value) {
 		.replace(/[\\+\-!(){}\[\]^"~*?:/]/g, "\\$&")
 		.replace(/&&/g, "\\&&")
 		.replace(/\|\|/g, "\\||");
+}
+
+function extractHubSpotFileId(fileUrl) {
+	if (!fileUrl || typeof fileUrl !== "string") {
+		return null;
+	}
+
+	const match = fileUrl.match(/\/uploaded-files\/signed-url-redirect\/(\d+)/);
+	return match ? match[1] : null;
 }
