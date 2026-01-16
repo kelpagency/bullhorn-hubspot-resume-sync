@@ -200,15 +200,16 @@ exports.handler = async (event = {}) => {
 							const contentType =
 								fileResponse.headers["content-type"] ||
 								"application/octet-stream";
-						const uploadFileName = buildCandidateResumeFileName(
-							candidateName,
-							candidateId,
-						);
-						const fileType = resolveBullhornFileType({
+						const resumeExtension = resolveResumeExtension({
 							fileName: resolved.fileName || fileName,
 							fileUrl: resolved.url,
 							contentType,
 						});
+						const uploadFileName = buildCandidateResumeFileName(
+							candidateName,
+							candidateId,
+							resumeExtension,
+						);
 						if (contentType.includes("text/html")) {
 							console.warn("resumeSync: HubSpot file fetch returned HTML", {
 								contactId,
@@ -229,7 +230,7 @@ exports.handler = async (event = {}) => {
 							candidateId,
 							fileName: uploadFileName,
 							contentType,
-							fileType,
+							fileType: BULLHORN_FILE_TYPE,
 							externalId: `hubspot-contact-${contactId}`,
 						};
 						console.log("resumeSync: uploading Bullhorn file", uploadMeta);
@@ -240,7 +241,6 @@ exports.handler = async (event = {}) => {
 							fileBuffer,
 							fileName: uploadFileName,
 							contentType,
-							fileType,
 							sourceContactId: contactId,
 						});
 						result.resumeUploadMeta = uploadMeta;
@@ -664,7 +664,6 @@ async function uploadCandidateFile({
 	fileBuffer,
 	fileName,
 	contentType,
-	fileType,
 	sourceContactId,
 }) {
 	if (!session?.restUrl || !session?.bhRestToken) {
@@ -679,7 +678,7 @@ async function uploadCandidateFile({
 		.put(`${session.restUrl}file/Candidate/${candidateId}/raw`, form, {
 			params: {
 				BhRestToken: session.bhRestToken,
-				filetype: fileType || BULLHORN_FILE_TYPE,
+				filetype: BULLHORN_FILE_TYPE,
 				externalID: externalId,
 			},
 			headers: form.getHeaders(),
@@ -755,10 +754,11 @@ function extractHubSpotFileId(fileUrl) {
 	return match ? match[1] : null;
 }
 
-function buildCandidateResumeFileName(candidateName, candidateId) {
+function buildCandidateResumeFileName(candidateName, candidateId, extension = "") {
 	const safeName = sanitizeFileNamePart(candidateName);
 	const namePart = safeName || `candidate-${candidateId || "unknown"}`;
-	return `resume ${namePart}`;
+	const normalizedExtension = extension ? `.${extension}` : "";
+	return `resume ${namePart}${normalizedExtension}`;
 }
 
 function sanitizeFileNamePart(value) {
@@ -774,7 +774,7 @@ function sanitizeFileNamePart(value) {
 	return normalized.slice(0, 120);
 }
 
-function resolveBullhornFileType({ fileName, fileUrl, contentType }) {
+function resolveResumeExtension({ fileName, fileUrl, contentType }) {
 	const nameExtension = extractFileExtension(fileName);
 	if (nameExtension) {
 		return nameExtension;
@@ -790,7 +790,7 @@ function resolveBullhornFileType({ fileName, fileUrl, contentType }) {
 		return contentTypeExtension;
 	}
 
-	return BULLHORN_FILE_TYPE;
+	return "";
 }
 
 function extractFileExtension(fileName) {
