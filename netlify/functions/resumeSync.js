@@ -148,6 +148,7 @@ exports.handler = async (event = {}) => {
 								categoryField,
 								categoryValue: categoryName,
 								categoryUpdate: updateResult,
+								messages: updateResult?.messages,
 							});
 						} else {
 							result.categoryName = categoryName;
