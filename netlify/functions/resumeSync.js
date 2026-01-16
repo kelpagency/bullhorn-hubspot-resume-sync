@@ -122,7 +122,7 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-			if (categoryName && CATEGORY_FIELDS.includes(eventPayload.propertyName)) {
+			if (categoryName) {
 				try {
 					const categoryId = await findCategoryIdByName(
 						bullhornSession,
@@ -162,93 +162,91 @@ exports.handler = async (event = {}) => {
 				}
 			}
 
-				if (eventPayload.propertyName === RESUME_PROPERTY) {
-					if (!resumeValue) {
-						result.resumeUpload = { skipped: true, reason: "Missing resume" };
-					} else {
-						const candidateName = await getCandidateName(
-							bullhornSession,
-							candidateId,
-						);
-						result.candidateName = candidateName;
-						const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
-						const resolved = await resolveHubSpotFile({
-							fileId,
-							fileUrl,
-							fileName,
-							accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
-						});
+			if (!resumeValue) {
+				result.resumeUpload = { skipped: true, reason: "Missing resume" };
+			} else {
+				const candidateName = await getCandidateName(
+					bullhornSession,
+					candidateId,
+				);
+				result.candidateName = candidateName;
+				const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
+				const resolved = await resolveHubSpotFile({
+					fileId,
+					fileUrl,
+					fileName,
+					accessToken: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
+				});
 
-					if (!resolved.url) {
-						result.resumeUpload = {
-							skipped: true,
-							reason: "Resume file not found",
-						};
-					} else {
-						console.log("resumeSync: resolved HubSpot file", {
+				if (!resolved.url) {
+					result.resumeUpload = {
+						skipped: true,
+						reason: "Resume file not found",
+					};
+				} else {
+					console.log("resumeSync: resolved HubSpot file", {
+						contactId,
+						candidateId,
+						fileId,
+						fileName: resolved.fileName || fileName,
+						fileUrl: resolved.url,
+					});
+					const fileResponse = await axios.get(resolved.url, {
+						responseType: "arraybuffer",
+					});
+
+					const fileBuffer = Buffer.from(fileResponse.data);
+					const contentType =
+						fileResponse.headers["content-type"] ||
+						"application/octet-stream";
+					const resumeExtension = resolveResumeExtension({
+						fileName: resolved.fileName || fileName,
+						fileUrl: resolved.url,
+						contentType,
+					});
+					const uploadFileName = buildCandidateResumeFileName(
+						candidateName,
+						candidateId,
+						resumeExtension,
+					);
+					if (contentType.includes("text/html")) {
+						console.warn("resumeSync: HubSpot file fetch returned HTML", {
 							contactId,
 							candidateId,
 							fileId,
-							fileName: resolved.fileName || fileName,
-							fileUrl: resolved.url,
-						});
-						const fileResponse = await axios.get(resolved.url, {
-							responseType: "arraybuffer",
-						});
-
-							const fileBuffer = Buffer.from(fileResponse.data);
-							const contentType =
-								fileResponse.headers["content-type"] ||
-								"application/octet-stream";
-						const resumeExtension = resolveResumeExtension({
-							fileName: resolved.fileName || fileName,
 							fileUrl: resolved.url,
 							contentType,
 						});
-						const uploadFileName = buildCandidateResumeFileName(
-							candidateName,
-							candidateId,
-							resumeExtension,
-						);
-						if (contentType.includes("text/html")) {
-							console.warn("resumeSync: HubSpot file fetch returned HTML", {
-								contactId,
-								candidateId,
-								fileId,
-								fileUrl: resolved.url,
-								contentType,
-								});
-								result.resumeUpload = {
-									skipped: true,
-									reason: "HubSpot file fetch returned HTML",
-									contentType,
-								};
-								results.push(result);
-								continue;
-						}
-						const uploadMeta = {
-							candidateId,
-							fileName: uploadFileName,
+						result.resumeUpload = {
+							skipped: true,
+							reason: "HubSpot file fetch returned HTML",
 							contentType,
-							fileType: BULLHORN_FILE_TYPE,
-							externalId: `hubspot-contact-${contactId}`,
 						};
-						console.log("resumeSync: uploading Bullhorn file", uploadMeta);
-
-							result.resumeUpload = await uploadCandidateFile({
-							session: bullhornSession,
-							candidateId,
-							fileBuffer,
-							fileName: uploadFileName,
-							contentType,
-							sourceContactId: contactId,
-						});
-						result.resumeUploadMeta = uploadMeta;
-						console.log("resumeSync: Bullhorn upload response", {
-							candidateId,
-							resumeUpload: result.resumeUpload,
-						});
+						results.push(result);
+						continue;
 					}
+					const uploadMeta = {
+						candidateId,
+						fileName: uploadFileName,
+						contentType,
+						fileType: BULLHORN_FILE_TYPE,
+						externalId: `hubspot-contact-${contactId}`,
+					};
+					console.log("resumeSync: uploading Bullhorn file", uploadMeta);
+
+					result.resumeUpload = await uploadCandidateFile({
+						session: bullhornSession,
+						candidateId,
+						fileBuffer,
+						fileName: uploadFileName,
+						contentType,
+						sourceContactId: contactId,
+					});
+					result.resumeUploadMeta = uploadMeta;
+					console.log("resumeSync: Bullhorn upload response", {
+						candidateId,
+						resumeUpload: result.resumeUpload,
+					});
 				}
 			}
 
