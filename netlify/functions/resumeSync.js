@@ -582,16 +582,18 @@ async function findCategoryIdByName(session, name) {
 		throw new Error("Missing Bullhorn session details");
 	}
 
-	const escapedName = escapeBullhornQueryValue(String(name || "").trim());
-	if (!escapedName) {
+	const normalizedName = String(name || "").trim();
+	if (!normalizedName) {
 		return null;
 	}
 
-	const response = await axios.get(`${session.restUrl}search/Category`, {
+	const escapedName = escapeBullhornWhereValue(normalizedName);
+	const response = await axios.get(`${session.restUrl}query/Category`, {
 		params: {
 			BhRestToken: session.bhRestToken,
-			query: `name:\"${escapedName}\"`,
+			where: `name="${escapedName}"`,
 			fields: "id,name",
+			count: 1,
 		},
 	});
 
@@ -741,6 +743,14 @@ function escapeBullhornQueryValue(value) {
 		.replace(/[\\+\-!(){}\[\]^"~*?:/]/g, "\\$&")
 		.replace(/&&/g, "\\&&")
 		.replace(/\|\|/g, "\\||");
+}
+
+function escapeBullhornWhereValue(value) {
+	if (!value) {
+		return "";
+	}
+
+	return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function extractHubSpotFileId(fileUrl) {
