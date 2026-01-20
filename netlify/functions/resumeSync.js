@@ -691,9 +691,7 @@ async function updateCandidateCategory({ session, candidateId, categoryId }) {
 		`${session.restUrl}entity/Candidate/${candidateId}`,
 		{
 			// Bullhorn expects category associations via the categories field.
-			categories: {
-				data: [{ id: categoryId }],
-			},
+			categories: [{ id: categoryId }],
 		},
 		{
 			params: {
