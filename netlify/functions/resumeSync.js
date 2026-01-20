@@ -690,7 +690,10 @@ async function updateCandidateCategory({ session, candidateId, categoryId }) {
 	const response = await axios.post(
 		`${session.restUrl}entity/Candidate/${candidateId}`,
 		{
-			categoryID: categoryId,
+			// Bullhorn expects category associations via the categories field.
+			categories: {
+				data: [{ id: categoryId }],
+			},
 		},
 		{
 			params: {
