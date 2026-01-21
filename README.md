@@ -8,6 +8,7 @@ The Netlify function at `netlify/functions/resumeSync.js` listens for HubSpot we
 events and mirrors resume/category updates into Bullhorn.
 
 How it works:
+
 - Accepts `POST` webhook payloads (single event or array of events).
 - Validates an API key header against `RESUME_SYNC_API_KEY`.
 - Loads the HubSpot contact (email, resume, category fields).
@@ -16,6 +17,7 @@ How it works:
 - Downloads the HubSpot resume file and uploads it to Bullhorn as a candidate file.
 
 Configuration (Netlify env vars or `.env` for local testing):
+
 - `HUBSPOT_PRIVATE_APP_TOKEN`: HubSpot private app token used to read contacts/files.
 - `RESUME_SYNC_API_KEY`: Shared secret required in the request header.
 - `BULLHORN_CLIENT_ID`, `BULLHORN_CLIENT_SECRET`, `BULLHORN_REFRESH_TOKEN`: Bullhorn OAuth.
@@ -26,6 +28,7 @@ Configuration (Netlify env vars or `.env` for local testing):
 - `BULLHORN_FILE_TYPE`: Optional, defaults to `Talent Resume`.
 
 Calling the function:
+
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
@@ -36,9 +39,10 @@ curl -X POST \
 
 The function only reacts to `object.propertyChange` events for the `resume` field or
 category fields (`creative`, `content`, `marketing`, `technical`,
-`strategicopertional`, `emerging`). Other events are ignored.
+`strategicoperational`, `emerging`). Other events are ignored.
 
 Local usage:
+
 ```bash
 cp .env.example .env # if you have one; otherwise set env vars manually
 npm run resumeSync:local -- --payload path/to/payload.json
@@ -51,8 +55,8 @@ contact ID in the script.
 
 Use this when you need a Bullhorn refresh token during local development.
 
-1) Follow the setup in `BULLHORN_OAUTH_LOCAL.md`.
-2) Run the helper:
+1. Follow the setup in `BULLHORN_OAUTH_LOCAL.md`.
+2. Run the helper:
 
 ```bash
 BULLHORN_CLIENT_ID="..." \

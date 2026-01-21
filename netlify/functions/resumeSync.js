@@ -20,7 +20,18 @@ const CATEGORY_FIELDS = [
 	"strategicoperational",
 	"emerging",
 ];
-const SYNC_PROPERTIES = new Set([RESUME_PROPERTY, ...CATEGORY_FIELDS]);
+const CATEGORY_FIELD_ALIASES = {
+	creative: ["creative"],
+	content: ["content"],
+	marketing: ["marketing"],
+	technical: ["technical"],
+	strategicoperational: ["strategicoperational", "strategicopertional"],
+	emerging: ["emerging"],
+};
+const SYNC_PROPERTIES = new Set([
+	RESUME_PROPERTY,
+	...Object.values(CATEGORY_FIELD_ALIASES).flat(),
+]);
 
 exports.handler = async (event = {}) => {
 	if (event.httpMethod && event.httpMethod !== "POST") {
@@ -73,9 +84,13 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
+			const categoryPropertyMatch = resolveCategoryPropertyName(
+				eventPayload.propertyName,
+			);
 			if (
 				eventPayload.propertyName &&
-				!SYNC_PROPERTIES.has(eventPayload.propertyName)
+				!SYNC_PROPERTIES.has(eventPayload.propertyName) &&
+				!categoryPropertyMatch
 			) {
 				continue;
 			}
@@ -85,9 +100,9 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
-			const shouldUpdateCategory =
-				CATEGORY_FIELDS.includes(eventPayload.propertyName) ||
-				!eventPayload.propertyName;
+			const shouldUpdateCategory = Boolean(
+				categoryPropertyMatch || !eventPayload.propertyName,
+			);
 			const shouldUpdateResume =
 				eventPayload.propertyName === RESUME_PROPERTY || !eventPayload.propertyName;
 			const properties = ["email"];
@@ -96,6 +111,12 @@ exports.handler = async (event = {}) => {
 			}
 			if (shouldUpdateCategory) {
 				properties.push(...CATEGORY_FIELDS);
+				if (
+					eventPayload.propertyName &&
+					!properties.includes(eventPayload.propertyName)
+				) {
+					properties.push(eventPayload.propertyName);
+				}
 			}
 
 			const contact = await hubspotClient.crm.contacts.basicApi.getById(
@@ -107,7 +128,7 @@ exports.handler = async (event = {}) => {
 				? contact.properties?.[RESUME_PROPERTY]
 				: null;
 			const categorySelection = shouldUpdateCategory
-				? getSelectedCategoryInfo(contact.properties)
+				? getSelectedCategoryInfo(contact.properties, eventPayload.propertyName)
 				: null;
 			const categoryName = categorySelection?.value || null;
 			const categoryField = categorySelection?.field || null;
@@ -122,6 +143,7 @@ exports.handler = async (event = {}) => {
 					contactId,
 					propertyName: eventPayload.propertyName,
 					selectedField: categoryField,
+					selectedProperty: categorySelection?.property,
 					selectedValue: categoryName,
 					expertiseFields,
 				});
@@ -796,13 +818,68 @@ function authorizeRequest(headers = {}) {
 	return { ok: true };
 }
 
-function getSelectedCategoryInfo(properties = {}) {
-	for (const field of CATEGORY_FIELDS) {
+function getSelectedCategoryInfo(properties = {}, preferredProperty) {
+	const candidateFields = [];
+	if (preferredProperty) {
+		candidateFields.push(preferredProperty);
+	}
+	candidateFields.push(...CATEGORY_FIELDS);
+
+	const seen = new Set();
+	for (const field of candidateFields) {
+		const normalizedField = normalizePropertyName(field);
+		if (!normalizedField || seen.has(normalizedField)) {
+			continue;
+		}
+		seen.add(normalizedField);
 		const value = properties[field];
 		if (typeof value === "string" && value.trim()) {
-			return { field, value: value.trim() };
+			const resolvedField = resolveCategoryPropertyName(field) || field;
+			return {
+				field: resolvedField,
+				property: field,
+				value: value.trim(),
+			};
 		}
 	}
+	return null;
+}
+
+function normalizePropertyName(value) {
+	if (!value) {
+		return "";
+	}
+	return String(value).trim().toLowerCase();
+}
+
+function resolveCategoryPropertyName(propertyName) {
+	const normalized = normalizePropertyName(propertyName);
+	if (!normalized) {
+		return null;
+	}
+
+	const collapsed = normalized.replace(/[_-]/g, "");
+	for (const [canonicalField, aliases] of Object.entries(
+		CATEGORY_FIELD_ALIASES,
+	)) {
+		for (const alias of aliases) {
+			if (collapsed === alias) {
+				return canonicalField;
+			}
+			if (
+				normalized === alias ||
+				normalized.endsWith(`_${alias}`) ||
+				normalized.endsWith(`-${alias}`) ||
+				normalized.endsWith(`__${alias}`) ||
+				normalized.startsWith(`${alias}_`) ||
+				normalized.startsWith(`${alias}-`) ||
+				normalized.startsWith(`${alias}__`)
+			) {
+				return canonicalField;
+			}
+		}
+	}
+
 	return null;
 }
 
