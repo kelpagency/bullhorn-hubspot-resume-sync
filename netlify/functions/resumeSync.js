@@ -100,11 +100,8 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
-			const shouldUpdateCategory = Boolean(
-				categoryPropertyMatch || !eventPayload.propertyName,
-			);
-			const shouldUpdateResume =
-				eventPayload.propertyName === RESUME_PROPERTY || !eventPayload.propertyName;
+			const shouldUpdateCategory = true;
+			const shouldUpdateResume = eventPayload.propertyName === RESUME_PROPERTY;
 			const properties = ["email"];
 			if (shouldUpdateResume) {
 				properties.push(RESUME_PROPERTY);
