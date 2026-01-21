@@ -69,7 +69,10 @@ exports.handler = async (event = {}) => {
 		console.log("resumeSync: received event", eventContext);
 
 		try {
-			if (eventPayload.subscriptionType !== "object.propertyChange") {
+			if (
+				eventPayload.subscriptionType &&
+				eventPayload.subscriptionType !== "object.propertyChange"
+			) {
 				continue;
 			}
 
