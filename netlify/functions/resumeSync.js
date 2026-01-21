@@ -649,7 +649,7 @@ async function findCategoryIdByName(session, name) {
 		const response = await axios.get(`${session.restUrl}query/Category`, {
 			params: {
 				BhRestToken: session.bhRestToken,
-				where: `name="${escapedName}"`,
+				where: `name='${escapedName}'`,
 				fields: "id,name",
 				count: 1,
 			},
@@ -658,7 +658,10 @@ async function findCategoryIdByName(session, name) {
 		return response.data?.data?.[0]?.id || null;
 	} catch (error) {
 		const errorKey = error.response?.data?.errorMessageKey;
-		if (errorKey !== "errors.notValidFieldName") {
+		if (
+			errorKey !== "errors.notValidFieldName" &&
+			errorKey !== "errors.badSearchQuery"
+		) {
 			throw error;
 		}
 
@@ -896,7 +899,7 @@ function escapeBullhornWhereValue(value) {
 		return "";
 	}
 
-	return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
 function resolveCategoryIdValue(value) {
