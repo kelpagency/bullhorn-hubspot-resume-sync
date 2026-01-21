@@ -20,18 +20,7 @@ const CATEGORY_FIELDS = [
 	"strategicoperational",
 	"emerging",
 ];
-const CATEGORY_FIELD_ALIASES = {
-	creative: ["creative"],
-	content: ["content"],
-	marketing: ["marketing"],
-	technical: ["technical"],
-	strategicoperational: ["strategicoperational", "strategicopertional"],
-	emerging: ["emerging"],
-};
-const SYNC_PROPERTIES = new Set([
-	RESUME_PROPERTY,
-	...Object.values(CATEGORY_FIELD_ALIASES).flat(),
-]);
+const SYNC_PROPERTIES = new Set([RESUME_PROPERTY, ...CATEGORY_FIELDS]);
 
 exports.handler = async (event = {}) => {
 	if (event.httpMethod && event.httpMethod !== "POST") {
@@ -84,13 +73,9 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
-			const categoryPropertyMatch = resolveCategoryPropertyName(
-				eventPayload.propertyName,
-			);
 			if (
 				eventPayload.propertyName &&
-				!SYNC_PROPERTIES.has(eventPayload.propertyName) &&
-				!categoryPropertyMatch
+				!SYNC_PROPERTIES.has(eventPayload.propertyName)
 			) {
 				continue;
 			}
@@ -100,51 +85,27 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
-			const shouldUpdateCategory = true;
-			const shouldUpdateResume = eventPayload.propertyName === RESUME_PROPERTY;
-			const properties = ["email"];
-			if (shouldUpdateResume) {
-				properties.push(RESUME_PROPERTY);
-			}
-			if (shouldUpdateCategory) {
-				properties.push(...CATEGORY_FIELDS);
-				if (
-					eventPayload.propertyName &&
-					!properties.includes(eventPayload.propertyName)
-				) {
-					properties.push(eventPayload.propertyName);
-				}
-			}
-
 			const contact = await hubspotClient.crm.contacts.basicApi.getById(
 				contactId,
-				properties,
+				["email", RESUME_PROPERTY, ...CATEGORY_FIELDS],
 			);
 			const email = contact.properties?.email;
-			const resumeValue = shouldUpdateResume
-				? contact.properties?.[RESUME_PROPERTY]
-				: null;
-			const categorySelection = shouldUpdateCategory
-				? getSelectedCategoryInfo(contact.properties, eventPayload.propertyName)
-				: null;
+			const resumeValue = contact.properties?.[RESUME_PROPERTY];
+			const categorySelection = getSelectedCategoryInfo(contact.properties);
 			const categoryName = categorySelection?.value || null;
 			const categoryField = categorySelection?.field || null;
 			const categoryIdValue = resolveCategoryIdValue(categoryName);
-
-			if (shouldUpdateCategory) {
-				const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
-					acc[field] = contact.properties?.[field];
-					return acc;
-				}, {});
-				console.log("resumeSync: expertise fields", {
-					contactId,
-					propertyName: eventPayload.propertyName,
-					selectedField: categoryField,
-					selectedProperty: categorySelection?.property,
-					selectedValue: categoryName,
-					expertiseFields,
-				});
-			}
+			const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
+				acc[field] = contact.properties?.[field];
+				return acc;
+			}, {});
+			console.log("resumeSync: expertise fields", {
+				contactId,
+				propertyName: eventPayload.propertyName,
+				selectedField: categoryField,
+				selectedValue: categoryName,
+				expertiseFields,
+			});
 
 			if (!email) {
 				results.push({ contactId, skipped: true, reason: "Missing email" });
@@ -166,60 +127,58 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-				if (shouldUpdateCategory && (categoryIdValue || categoryName)) {
-					try {
-						const categoryId =
-							categoryIdValue ||
-							(await findCategoryIdByName(bullhornSession, categoryName));
-						if (categoryId) {
-							const updateResult = await updateCandidateCategory({
-								session: bullhornSession,
-								candidateId,
-								categoryId,
-							});
-							result.categoryName = categoryName;
-							result.categoryField = categoryField;
-							result.categoryId = categoryId;
-							result.categoryUpdate = updateResult;
-							console.log("resumeSync: Bullhorn category update response", {
-								candidateId,
-								categoryId,
-								categoryField,
-								categoryValue: categoryName,
-								categoryUpdate: updateResult,
-								messages: updateResult?.messages,
-							});
-						} else {
-							result.categoryName = categoryName;
-							result.categoryField = categoryField;
-							result.categoryUpdate = {
-								skipped: true,
-								reason: "Category not found",
-							};
-						}
-					} catch (error) {
-						console.error("resumeSync: Bullhorn category update failed", {
-							contactId,
+			if (categoryIdValue || categoryName) {
+				try {
+					const categoryId =
+						categoryIdValue ||
+						(await findCategoryIdByName(bullhornSession, categoryName));
+					if (categoryId) {
+						const updateResult = await updateCandidateCategory({
+							session: bullhornSession,
 							candidateId,
-							categoryName,
-							categoryField,
-							message: error.message,
-							status: error.response?.status,
-							data: error.response?.data,
+							categoryId,
 						});
+						result.categoryName = categoryName;
+						result.categoryField = categoryField;
+						result.categoryId = categoryId;
+						result.categoryUpdate = updateResult;
+						console.log("resumeSync: Bullhorn category update response", {
+							candidateId,
+							categoryId,
+							categoryField,
+							categoryValue: categoryName,
+							categoryUpdate: updateResult,
+							messages: updateResult?.messages,
+						});
+					} else {
 						result.categoryName = categoryName;
 						result.categoryField = categoryField;
 						result.categoryUpdate = {
 							skipped: true,
-							reason: "Category update failed",
-							error: error.message,
+							reason: "Category not found",
+						};
+					}
+				} catch (error) {
+					console.error("resumeSync: Bullhorn category update failed", {
+						contactId,
+						candidateId,
+						categoryName,
+						categoryField,
+						message: error.message,
+						status: error.response?.status,
+						data: error.response?.data,
+					});
+					result.categoryName = categoryName;
+					result.categoryField = categoryField;
+					result.categoryUpdate = {
+						skipped: true,
+						reason: "Category update failed",
+						error: error.message,
 					};
 				}
 			}
 
-			if (!shouldUpdateResume) {
-				result.resumeUpload = { skipped: true, reason: "Resume update not requested" };
-			} else if (!resumeValue) {
+			if (!resumeValue) {
 				result.resumeUpload = { skipped: true, reason: "Missing resume" };
 			} else {
 				const candidateName = await getCandidateName(
@@ -254,8 +213,7 @@ exports.handler = async (event = {}) => {
 
 					const fileBuffer = Buffer.from(fileResponse.data);
 					const contentType =
-						fileResponse.headers["content-type"] ||
-						"application/octet-stream";
+						fileResponse.headers["content-type"] || "application/octet-stream";
 					const resumeExtension = resolveResumeExtension({
 						fileName: resolved.fileName || fileName,
 						fileUrl: resolved.url,
@@ -409,7 +367,12 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
 	}
 
 	return {
-		url: signedUrl || response.data?.url || response.data?.downloadUrl || fileUrl || null,
+		url:
+			signedUrl ||
+			response.data?.url ||
+			response.data?.downloadUrl ||
+			fileUrl ||
+			null,
 		fileName: response.data?.name || fileName,
 	};
 }
@@ -649,7 +612,7 @@ async function findCategoryIdByName(session, name) {
 		const response = await axios.get(`${session.restUrl}query/Category`, {
 			params: {
 				BhRestToken: session.bhRestToken,
-				where: `name='${escapedName}'`,
+				where: `name="${escapedName}"`,
 				fields: "id,name",
 				count: 1,
 			},
@@ -658,19 +621,19 @@ async function findCategoryIdByName(session, name) {
 		return response.data?.data?.[0]?.id || null;
 	} catch (error) {
 		const errorKey = error.response?.data?.errorMessageKey;
-		if (
-			errorKey !== "errors.notValidFieldName" &&
-			errorKey !== "errors.badSearchQuery"
-		) {
+		if (errorKey !== "errors.notValidFieldName") {
 			throw error;
 		}
 
-		console.warn("resumeSync: category name query failed, falling back to list", {
-			categoryName: normalizedName,
-			message: error.message,
-			status: error.response?.status,
-			data: error.response?.data,
-		});
+		console.warn(
+			"resumeSync: category name query failed, falling back to list",
+			{
+				categoryName: normalizedName,
+				message: error.message,
+				status: error.response?.status,
+				data: error.response?.data,
+			},
+		);
 
 		const listResponse = await axios.get(`${session.restUrl}query/Category`, {
 			params: {
@@ -683,7 +646,9 @@ async function findCategoryIdByName(session, name) {
 
 		const target = normalizedName.toLowerCase();
 		const match = listResponse.data?.data?.find((category) => {
-			const categoryName = String(category?.name || "").trim().toLowerCase();
+			const categoryName = String(category?.name || "")
+				.trim()
+				.toLowerCase();
 			return categoryName === target;
 		});
 
@@ -818,68 +783,13 @@ function authorizeRequest(headers = {}) {
 	return { ok: true };
 }
 
-function getSelectedCategoryInfo(properties = {}, preferredProperty) {
-	const candidateFields = [];
-	if (preferredProperty) {
-		candidateFields.push(preferredProperty);
-	}
-	candidateFields.push(...CATEGORY_FIELDS);
-
-	const seen = new Set();
-	for (const field of candidateFields) {
-		const normalizedField = normalizePropertyName(field);
-		if (!normalizedField || seen.has(normalizedField)) {
-			continue;
-		}
-		seen.add(normalizedField);
+function getSelectedCategoryInfo(properties = {}) {
+	for (const field of CATEGORY_FIELDS) {
 		const value = properties[field];
 		if (typeof value === "string" && value.trim()) {
-			const resolvedField = resolveCategoryPropertyName(field) || field;
-			return {
-				field: resolvedField,
-				property: field,
-				value: value.trim(),
-			};
+			return { field, value: value.trim() };
 		}
 	}
-	return null;
-}
-
-function normalizePropertyName(value) {
-	if (!value) {
-		return "";
-	}
-	return String(value).trim().toLowerCase();
-}
-
-function resolveCategoryPropertyName(propertyName) {
-	const normalized = normalizePropertyName(propertyName);
-	if (!normalized) {
-		return null;
-	}
-
-	const collapsed = normalized.replace(/[_-]/g, "");
-	for (const [canonicalField, aliases] of Object.entries(
-		CATEGORY_FIELD_ALIASES,
-	)) {
-		for (const alias of aliases) {
-			if (collapsed === alias) {
-				return canonicalField;
-			}
-			if (
-				normalized === alias ||
-				normalized.endsWith(`_${alias}`) ||
-				normalized.endsWith(`-${alias}`) ||
-				normalized.endsWith(`__${alias}`) ||
-				normalized.startsWith(`${alias}_`) ||
-				normalized.startsWith(`${alias}-`) ||
-				normalized.startsWith(`${alias}__`)
-			) {
-				return canonicalField;
-			}
-		}
-	}
-
 	return null;
 }
 
@@ -899,7 +809,7 @@ function escapeBullhornWhereValue(value) {
 		return "";
 	}
 
-	return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+	return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function resolveCategoryIdValue(value) {
@@ -928,7 +838,11 @@ function extractHubSpotFileId(fileUrl) {
 	return match ? match[1] : null;
 }
 
-function buildCandidateResumeFileName(candidateName, candidateId, extension = "") {
+function buildCandidateResumeFileName(
+	candidateName,
+	candidateId,
+	extension = "",
+) {
 	const safeName = sanitizeFileNamePart(candidateName);
 	const namePart = safeName || `candidate-${candidateId || "unknown"}`;
 	const normalizedExtension = extension ? `.${extension}` : "";
@@ -995,7 +909,8 @@ function mapContentTypeToExtension(contentType) {
 	const mapping = {
 		"application/pdf": "pdf",
 		"application/msword": "doc",
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+			"docx",
 		"application/rtf": "rtf",
 		"text/plain": "txt",
 	};
