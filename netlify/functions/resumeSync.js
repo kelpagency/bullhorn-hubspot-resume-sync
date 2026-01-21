@@ -127,53 +127,53 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-				if (categoryIdValue || categoryName) {
-					try {
-						const categoryId =
-							categoryIdValue ||
-							(await findCategoryIdByName(bullhornSession, categoryName));
-						if (categoryId) {
-							const updateResult = await updateCandidateCategory({
-								session: bullhornSession,
-								candidateId,
-								categoryId,
-							});
-							result.categoryName = categoryName;
-							result.categoryField = categoryField;
-							result.categoryId = categoryId;
-							result.categoryUpdate = updateResult;
-							console.log("resumeSync: Bullhorn category update response", {
-								candidateId,
-								categoryId,
-								categoryField,
-								categoryValue: categoryName,
-								categoryUpdate: updateResult,
-								messages: updateResult?.messages,
-							});
-						} else {
-							result.categoryName = categoryName;
-							result.categoryField = categoryField;
-							result.categoryUpdate = {
-								skipped: true,
-								reason: "Category not found",
-							};
-						}
-					} catch (error) {
-						console.error("resumeSync: Bullhorn category update failed", {
-							contactId,
+			if (categoryIdValue || categoryName) {
+				try {
+					const categoryId =
+						categoryIdValue ||
+						(await findCategoryIdByName(bullhornSession, categoryName));
+					if (categoryId) {
+						const updateResult = await updateCandidateCategory({
+							session: bullhornSession,
 							candidateId,
-							categoryName,
-							categoryField,
-							message: error.message,
-							status: error.response?.status,
-							data: error.response?.data,
+							categoryId,
 						});
+						result.categoryName = categoryName;
+						result.categoryField = categoryField;
+						result.categoryId = categoryId;
+						result.categoryUpdate = updateResult;
+						console.log("resumeSync: Bullhorn category update response", {
+							candidateId,
+							categoryId,
+							categoryField,
+							categoryValue: categoryName,
+							categoryUpdate: updateResult,
+							messages: updateResult?.messages,
+						});
+					} else {
 						result.categoryName = categoryName;
 						result.categoryField = categoryField;
 						result.categoryUpdate = {
 							skipped: true,
-							reason: "Category update failed",
-							error: error.message,
+							reason: "Category not found",
+						};
+					}
+				} catch (error) {
+					console.error("resumeSync: Bullhorn category update failed", {
+						contactId,
+						candidateId,
+						categoryName,
+						categoryField,
+						message: error.message,
+						status: error.response?.status,
+						data: error.response?.data,
+					});
+					result.categoryName = categoryName;
+					result.categoryField = categoryField;
+					result.categoryUpdate = {
+						skipped: true,
+						reason: "Category update failed",
+						error: error.message,
 					};
 				}
 			}
@@ -213,8 +213,7 @@ exports.handler = async (event = {}) => {
 
 					const fileBuffer = Buffer.from(fileResponse.data);
 					const contentType =
-						fileResponse.headers["content-type"] ||
-						"application/octet-stream";
+						fileResponse.headers["content-type"] || "application/octet-stream";
 					const resumeExtension = resolveResumeExtension({
 						fileName: resolved.fileName || fileName,
 						fileUrl: resolved.url,
@@ -368,7 +367,12 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
 	}
 
 	return {
-		url: signedUrl || response.data?.url || response.data?.downloadUrl || fileUrl || null,
+		url:
+			signedUrl ||
+			response.data?.url ||
+			response.data?.downloadUrl ||
+			fileUrl ||
+			null,
 		fileName: response.data?.name || fileName,
 	};
 }
@@ -621,12 +625,15 @@ async function findCategoryIdByName(session, name) {
 			throw error;
 		}
 
-		console.warn("resumeSync: category name query failed, falling back to list", {
-			categoryName: normalizedName,
-			message: error.message,
-			status: error.response?.status,
-			data: error.response?.data,
-		});
+		console.warn(
+			"resumeSync: category name query failed, falling back to list",
+			{
+				categoryName: normalizedName,
+				message: error.message,
+				status: error.response?.status,
+				data: error.response?.data,
+			},
+		);
 
 		const listResponse = await axios.get(`${session.restUrl}query/Category`, {
 			params: {
@@ -639,7 +646,9 @@ async function findCategoryIdByName(session, name) {
 
 		const target = normalizedName.toLowerCase();
 		const match = listResponse.data?.data?.find((category) => {
-			const categoryName = String(category?.name || "").trim().toLowerCase();
+			const categoryName = String(category?.name || "")
+				.trim()
+				.toLowerCase();
 			return categoryName === target;
 		});
 
@@ -692,7 +701,7 @@ async function updateCandidateCategory({ session, candidateId, categoryId }) {
 		{
 			// Bullhorn expects category associations via the categories field.
 			categories: {
-				add: [categoryId],
+				replaceAll: [categoryId],
 			},
 		},
 		{
@@ -829,7 +838,11 @@ function extractHubSpotFileId(fileUrl) {
 	return match ? match[1] : null;
 }
 
-function buildCandidateResumeFileName(candidateName, candidateId, extension = "") {
+function buildCandidateResumeFileName(
+	candidateName,
+	candidateId,
+	extension = "",
+) {
 	const safeName = sanitizeFileNamePart(candidateName);
 	const namePart = safeName || `candidate-${candidateId || "unknown"}`;
 	const normalizedExtension = extension ? `.${extension}` : "";
@@ -896,7 +909,8 @@ function mapContentTypeToExtension(contentType) {
 	const mapping = {
 		"application/pdf": "pdf",
 		"application/msword": "doc",
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+			"docx",
 		"application/rtf": "rtf",
 		"text/plain": "txt",
 	};
