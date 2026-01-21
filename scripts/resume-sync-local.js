@@ -23,9 +23,7 @@ function loadPayload(payloadPath) {
   if (!payloadPath) {
     return [
       {
-        subscriptionType: "object.propertyChange",
         objectId: 100133051,
-        propertyName: "resume",
       },
     ];
   }

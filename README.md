@@ -27,7 +27,7 @@ Configuration (Netlify env vars or `.env` for local testing):
 - `BULLHORN_REST_BASE_URL`: Optional, defaults to `https://rest.bullhornstaffing.com`.
 - `BULLHORN_FILE_TYPE`: Optional, defaults to `Talent Resume`.
 
-Calling the function:
+Calling the function (webhook-style):
 
 ```bash
 curl -X POST \
@@ -39,7 +39,19 @@ curl -X POST \
 
 The function only reacts to `object.propertyChange` events for the `resume` field or
 category fields (`creative`, `content`, `marketing`, `technical`,
-`strategicoperational`, `emerging`). Other events are ignored.
+`strategicoperational`, `emerging`). Other events are ignored. If
+`subscriptionType` is omitted, the handler treats the request as a manual trigger
+and syncs resume/category fields for the contact.
+
+Manual trigger example (minimal payload):
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Resume-Sync-Api-Key: $RESUME_SYNC_API_KEY" \
+  -d '[{"objectId":123}]' \
+  https://<your-netlify-site>/.netlify/functions/resumeSync
+```
 
 Local usage:
 
@@ -48,7 +60,7 @@ cp .env.example .env # if you have one; otherwise set env vars manually
 npm run resumeSync:local -- --payload path/to/payload.json
 ```
 
-If you omit `--payload`, it will run a default `resume` change event against the
+If you omit `--payload`, it will run a default manual trigger against the
 contact ID in the script.
 
 ## Bullhorn local OAuth
