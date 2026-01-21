@@ -85,27 +85,47 @@ exports.handler = async (event = {}) => {
 				continue;
 			}
 
+			const shouldUpdateCategory =
+				CATEGORY_FIELDS.includes(eventPayload.propertyName) ||
+				!eventPayload.propertyName;
+			const shouldUpdateResume =
+				eventPayload.propertyName === RESUME_PROPERTY || !eventPayload.propertyName;
+			const properties = ["email"];
+			if (shouldUpdateResume) {
+				properties.push(RESUME_PROPERTY);
+			}
+			if (shouldUpdateCategory) {
+				properties.push(...CATEGORY_FIELDS);
+			}
+
 			const contact = await hubspotClient.crm.contacts.basicApi.getById(
 				contactId,
-				["email", RESUME_PROPERTY, ...CATEGORY_FIELDS],
+				properties,
 			);
 			const email = contact.properties?.email;
-			const resumeValue = contact.properties?.[RESUME_PROPERTY];
-			const categorySelection = getSelectedCategoryInfo(contact.properties);
+			const resumeValue = shouldUpdateResume
+				? contact.properties?.[RESUME_PROPERTY]
+				: null;
+			const categorySelection = shouldUpdateCategory
+				? getSelectedCategoryInfo(contact.properties)
+				: null;
 			const categoryName = categorySelection?.value || null;
 			const categoryField = categorySelection?.field || null;
 			const categoryIdValue = resolveCategoryIdValue(categoryName);
-			const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
-				acc[field] = contact.properties?.[field];
-				return acc;
-			}, {});
-			console.log("resumeSync: expertise fields", {
-				contactId,
-				propertyName: eventPayload.propertyName,
-				selectedField: categoryField,
-				selectedValue: categoryName,
-				expertiseFields,
-			});
+
+			if (shouldUpdateCategory) {
+				const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
+					acc[field] = contact.properties?.[field];
+					return acc;
+				}, {});
+				console.log("resumeSync: expertise fields", {
+					contactId,
+					propertyName: eventPayload.propertyName,
+					selectedField: categoryField,
+					selectedValue: categoryName,
+					expertiseFields,
+				});
+			}
 
 			if (!email) {
 				results.push({ contactId, skipped: true, reason: "Missing email" });
@@ -127,7 +147,7 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-				if (categoryIdValue || categoryName) {
+				if (shouldUpdateCategory && (categoryIdValue || categoryName)) {
 					try {
 						const categoryId =
 							categoryIdValue ||
@@ -178,7 +198,9 @@ exports.handler = async (event = {}) => {
 				}
 			}
 
-			if (!resumeValue) {
+			if (!shouldUpdateResume) {
+				result.resumeUpload = { skipped: true, reason: "Resume update not requested" };
+			} else if (!resumeValue) {
 				result.resumeUpload = { skipped: true, reason: "Missing resume" };
 			} else {
 				const candidateName = await getCandidateName(
@@ -692,7 +714,7 @@ async function updateCandidateCategory({ session, candidateId, categoryId }) {
 		{
 			// Bullhorn expects category associations via the categories field.
 			categories: {
-				add: [categoryId],
+				replaceAll: [categoryId],
 			},
 		},
 		{
