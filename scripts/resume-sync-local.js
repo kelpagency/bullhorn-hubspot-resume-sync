@@ -41,7 +41,11 @@ async function run() {
     httpMethod: "POST",
     isBase64Encoded: false,
     body: JSON.stringify(payload),
+    headers: {},
   };
+  if (process.env.RESUME_SYNC_API_KEY) {
+    event.headers["resume-sync-api-key"] = process.env.RESUME_SYNC_API_KEY;
+  }
 
   const result = await handler(event);
   const body = result?.body ? JSON.parse(result.body) : null;

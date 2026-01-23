@@ -27,12 +27,17 @@ exports.handler = async (event = {}) => {
 		return response(405, { error: "Method not allowed" });
 	}
 
-	const authResult = authorizeRequest(event.headers || {});
-	if (!authResult.ok) {
-		return {
-			statusCode: 401,
-			body: JSON.stringify({ error: authResult.message }),
-		};
+	const skipAuth = process.env.RESUME_SYNC_SKIP_AUTH === "true";
+	if (!skipAuth) {
+		const authResult = authorizeRequest(event.headers || {});
+		if (!authResult.ok) {
+			return {
+				statusCode: 401,
+				body: JSON.stringify({ error: authResult.message }),
+			};
+		}
+	} else {
+		console.warn("resumeSync: skipping API key auth (RESUME_SYNC_SKIP_AUTH)");
 	}
 
 	if (!process.env.HUBSPOT_PRIVATE_APP_TOKEN) {
@@ -94,10 +99,21 @@ exports.handler = async (event = {}) => {
 			);
 			const email = contact.properties?.email;
 			const resumeValue = contact.properties?.[RESUME_PROPERTY];
-			const categorySelection = getSelectedCategoryInfo(contact.properties);
-			const categoryName = categorySelection?.value || null;
-			const categoryField = categorySelection?.field || null;
-			const categoryIdValue = resolveCategoryIdValue(categoryName);
+			const categorySelections = getSelectedCategorySelections(
+				contact.properties,
+			);
+			const categoryValues = categorySelections.map(
+				(selection) => selection.value,
+			);
+			const categoryFields = categorySelections.map(
+				(selection) => selection.field,
+			);
+			const categoryName = categoryValues.length
+				? categoryValues.join(", ")
+				: null;
+			const categoryField = categoryFields.length
+				? categoryFields.join(", ")
+				: null;
 			const expertiseFields = CATEGORY_FIELDS.reduce((acc, field) => {
 				acc[field] = contact.properties?.[field];
 				return acc;
@@ -130,24 +146,53 @@ exports.handler = async (event = {}) => {
 			const result = { contactId, candidateId };
 			console.log("resumeSync: processing contact", { contactId, candidateId });
 
-			if (categoryIdValue || categoryName) {
+			if (categoryValues.length) {
 				try {
-					const categoryId =
-						categoryIdValue ||
-						(await findCategoryIdByName(bullhornSession, categoryName));
-					if (categoryId) {
+					const categoryIdSet = new Set();
+					const categoryNameSet = new Set();
+
+					for (const selection of categorySelections) {
+						const categoryIdValue = resolveCategoryIdValue(selection.value);
+						if (categoryIdValue !== null) {
+							categoryIdSet.add(categoryIdValue);
+						} else {
+							categoryNameSet.add(selection.value);
+						}
+					}
+
+					const missingCategoryNames = [];
+					for (const name of categoryNameSet) {
+						const categoryId = await findCategoryIdByName(
+							bullhornSession,
+							name,
+						);
+						if (categoryId) {
+							categoryIdSet.add(categoryId);
+						} else {
+							missingCategoryNames.push(name);
+						}
+					}
+
+					const categoryIds = Array.from(categoryIdSet);
+					if (categoryIds.length) {
 						const updateResult = await updateCandidateCategory({
 							session: bullhornSession,
 							candidateId,
-							categoryId,
+							categoryIds,
 						});
 						result.categoryName = categoryName;
 						result.categoryField = categoryField;
-						result.categoryId = categoryId;
+						result.categoryIds = categoryIds;
+						if (categoryIds.length === 1) {
+							result.categoryId = categoryIds[0];
+						}
+						if (missingCategoryNames.length) {
+							result.missingCategoryNames = missingCategoryNames;
+						}
 						result.categoryUpdate = updateResult;
 						console.log("resumeSync: Bullhorn category update response", {
 							candidateId,
-							categoryId,
+							categoryIds,
 							categoryField,
 							categoryValue: categoryName,
 							categoryUpdate: updateResult,
@@ -159,6 +204,7 @@ exports.handler = async (event = {}) => {
 						result.categoryUpdate = {
 							skipped: true,
 							reason: "Category not found",
+							missingCategoryNames,
 						};
 					}
 				} catch (error) {
@@ -697,7 +743,7 @@ async function getCandidateName(session, candidateId) {
 	}
 }
 
-async function updateCandidateCategory({ session, candidateId, categoryId }) {
+async function updateCandidateCategory({ session, candidateId, categoryIds }) {
 	if (!session?.restUrl || !session?.bhRestToken) {
 		throw new Error("Missing Bullhorn session details");
 	}
@@ -707,7 +753,7 @@ async function updateCandidateCategory({ session, candidateId, categoryId }) {
 		{
 			// Bullhorn expects category associations via the categories field.
 			categories: {
-				replaceAll: [categoryId],
+				replaceAll: categoryIds,
 			},
 		},
 		{
@@ -789,14 +835,18 @@ function authorizeRequest(headers = {}) {
 	return { ok: true };
 }
 
-function getSelectedCategoryInfo(properties = {}) {
+function getSelectedCategorySelections(properties = {}) {
+	const selections = [];
 	for (const field of CATEGORY_FIELDS) {
 		const value = properties[field];
-		if (typeof value === "string" && value.trim()) {
-			return { field, value: value.trim() };
+		if (typeof value === "string") {
+			const trimmed = value.trim();
+			if (trimmed) {
+				selections.push({ field, value: trimmed });
+			}
 		}
 	}
-	return null;
+	return selections;
 }
 
 function escapeBullhornQueryValue(value) {
