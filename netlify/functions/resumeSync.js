@@ -21,6 +21,7 @@ const CATEGORY_FIELDS = [
 	"emerging",
 ];
 const SYNC_PROPERTIES = new Set([RESUME_PROPERTY, ...CATEGORY_FIELDS]);
+let cachedBullhornRefreshToken = process.env.BULLHORN_REFRESH_TOKEN || null;
 
 exports.handler = async (event = {}) => {
 	if (event.httpMethod && event.httpMethod !== "POST") {
@@ -343,6 +344,51 @@ function parseResumeValue(resumeValue) {
 	let fileUrl = null;
 	let fileName = null;
 
+	if (Array.isArray(resumeValue)) {
+		for (const item of resumeValue) {
+			const parsed = parseResumeValue(item);
+			if (parsed.fileId || parsed.fileUrl || parsed.fileName) {
+				return parsed;
+			}
+		}
+		return { fileId, fileUrl, fileName };
+	}
+
+	if (resumeValue && typeof resumeValue === "object") {
+		if (Array.isArray(resumeValue.files)) {
+			return parseResumeValue(resumeValue.files);
+		}
+
+		if (resumeValue.file) {
+			return parseResumeValue(resumeValue.file);
+		}
+
+		if (resumeValue.value !== undefined) {
+			return parseResumeValue(resumeValue.value);
+		}
+
+		if (Array.isArray(resumeValue.values)) {
+			return parseResumeValue(resumeValue.values);
+		}
+
+		fileId = normalizeFileId(
+			resumeValue.id ||
+				resumeValue.fileId ||
+				resumeValue.fileID ||
+				resumeValue.hs_file_id ||
+				resumeValue.file_id ||
+				fileId,
+		);
+		fileUrl =
+			resumeValue.url ||
+			resumeValue.downloadUrl ||
+			resumeValue.link ||
+			resumeValue.path ||
+			fileUrl;
+		fileName = resumeValue.name || resumeValue.fileName || fileName;
+		return { fileId, fileUrl, fileName };
+	}
+
 	if (typeof resumeValue !== "string") {
 		return { fileId, fileUrl, fileName };
 	}
@@ -355,10 +401,7 @@ function parseResumeValue(resumeValue) {
 	if (trimmed.startsWith("{")) {
 		try {
 			const parsed = JSON.parse(trimmed);
-			fileId = parsed.id || parsed.fileId || fileId;
-			fileUrl = parsed.url || parsed.downloadUrl || parsed.link || fileUrl;
-			fileName = parsed.name || parsed.fileName || fileName;
-			return { fileId, fileUrl, fileName };
+			return parseResumeValue(parsed);
 		} catch (error) {
 			// Fall through to string parsing.
 		}
@@ -367,7 +410,7 @@ function parseResumeValue(resumeValue) {
 	if (/^https?:\/\//.test(trimmed)) {
 		fileUrl = trimmed;
 	} else if (/^\d+$/.test(trimmed)) {
-		fileId = trimmed;
+		fileId = normalizeFileId(trimmed);
 	}
 
 	return { fileId, fileUrl, fileName };
@@ -429,7 +472,7 @@ async function resolveHubSpotFile({ fileId, fileUrl, fileName, accessToken }) {
 async function getBullhornSession({ retryOnAuthFailure = true } = {}) {
 	const clientId = process.env.BULLHORN_CLIENT_ID;
 	const clientSecret = process.env.BULLHORN_CLIENT_SECRET;
-	const refreshToken = process.env.BULLHORN_REFRESH_TOKEN;
+	const refreshToken = getBullhornRefreshToken();
 	const redirectUri = process.env.BULLHORN_REDIRECT_URI;
 	const username = process.env.BULLHORN_USERNAME;
 	const password = process.env.BULLHORN_PASSWORD;
@@ -480,6 +523,8 @@ async function getBullhornSession({ retryOnAuthFailure = true } = {}) {
 	const rotatedRefreshToken = tokenResponse.data?.refresh_token;
 
 	if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) {
+		cachedBullhornRefreshToken = rotatedRefreshToken;
+		process.env.BULLHORN_REFRESH_TOKEN = rotatedRefreshToken;
 		console.warn(
 			"Bullhorn refresh token rotated. Update BULLHORN_REFRESH_TOKEN to avoid auth failures.",
 		);
@@ -893,8 +938,33 @@ function extractHubSpotFileId(fileUrl) {
 		return null;
 	}
 
-	const match = fileUrl.match(/\/uploaded-files\/signed-url-redirect\/(\d+)/);
-	return match ? match[1] : null;
+	const match = fileUrl.match(
+		/(?:\/uploaded-files\/signed-url-redirect\/|\/files\/v3\/files\/|\/filemanager\/api\/v3\/files\/)(\d+)/,
+	);
+	if (match) {
+		return match[1];
+	}
+
+	const queryMatch = fileUrl.match(/[?&](?:id|fileId|fileID)=(\d+)/);
+	return queryMatch ? queryMatch[1] : null;
+}
+
+function normalizeFileId(fileId) {
+	if (fileId === null || fileId === undefined) {
+		return null;
+	}
+
+	const trimmed = String(fileId).trim();
+	return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+function getBullhornRefreshToken() {
+	if (cachedBullhornRefreshToken) {
+		return cachedBullhornRefreshToken;
+	}
+
+	cachedBullhornRefreshToken = process.env.BULLHORN_REFRESH_TOKEN || null;
+	return cachedBullhornRefreshToken;
 }
 
 function buildCandidateResumeFileName(
