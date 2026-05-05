@@ -237,6 +237,24 @@ exports.handler = async (event = {}) => {
 				);
 				result.candidateName = candidateName;
 				const { fileId, fileUrl, fileName } = parseResumeValue(resumeValue);
+
+				if (!fileId && !fileUrl) {
+					console.warn("resumeSync: resume value did not contain a file reference", {
+						contactId,
+						candidateId,
+						resumeValueType: Array.isArray(resumeValue)
+							? "array"
+							: typeof resumeValue,
+					});
+					result.resumeUpload = {
+						skipped: true,
+						reason: "Resume value did not contain a file reference",
+						fileName: fileName || null,
+					};
+					results.push(result);
+					continue;
+				}
+
 				const resolved = await resolveHubSpotFile({
 					fileId,
 					fileUrl,
@@ -398,7 +416,7 @@ function parseResumeValue(resumeValue) {
 		return { fileId, fileUrl, fileName };
 	}
 
-	if (trimmed.startsWith("{")) {
+	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 		try {
 			const parsed = JSON.parse(trimmed);
 			return parseResumeValue(parsed);

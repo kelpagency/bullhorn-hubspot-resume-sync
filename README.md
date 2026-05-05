@@ -63,6 +63,18 @@ npm run resumeSync:local -- --payload path/to/payload.json
 If you omit `--payload`, it will run a default manual trigger against the
 contact ID in the script.
 
+Backfill recently missed contacts:
+
+```bash
+npm run resumeSync:backfill -- --hours 24
+```
+
+This searches HubSpot for contacts modified in the last 24 hours and replays
+them through the sync handler in batches. You can widen the window with
+`--hours N` or target an exact start time with `--since 2026-05-01T00:00:00Z`.
+If your HubSpot account uses a different modified-date property, pass it with
+`--property hs_lastmodifieddate` or another property name.
+
 ## Bullhorn local OAuth
 
 Use this when you need a Bullhorn refresh token during local development.
