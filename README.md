@@ -70,10 +70,12 @@ npm run resumeSync:backfill -- --hours 24
 ```
 
 This searches HubSpot for contacts modified in the last 24 hours and replays
-them through the sync handler in batches. You can widen the window with
-`--hours N` or target an exact start time with `--since 2026-05-01T00:00:00Z`.
-If your HubSpot account uses a different modified-date property, pass it with
-`--property hs_lastmodifieddate` or another property name.
+them through a screening step first. For each contact, it checks Bullhorn by
+email and only replays the sync if the Bullhorn candidate does not already have
+a resume. You can widen the window with `--hours N` or target an exact start
+time with `--since 2026-05-01T00:00:00Z`. If your HubSpot account uses a
+different modified-date property, pass it with `--property hs_lastmodifieddate`
+or another property name.
 
 ## Bullhorn local OAuth
 

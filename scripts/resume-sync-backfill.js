@@ -4,7 +4,12 @@ require("dotenv").config();
 
 const hubspot = require("@hubspot/api-client");
 
-const { handler } = require("../netlify/functions/resumeSync");
+const {
+	handler,
+	getBullhornSession,
+	findCandidateIdByEmail,
+	hasBullhornResume,
+} = require("../netlify/functions/resumeSync");
 
 const CATEGORY_FIELDS = [
 	"creative",
@@ -66,7 +71,7 @@ function resolveSinceDate(args) {
 async function main() {
 	const { since, hours, batchSize, limit, property } = parseArgs(process.argv);
 	const sinceDate = resolveSinceDate({ since, hours });
-	const sinceMillis = sinceDate.getTime().toString();
+	const sinceMillis = sinceDate.getTime();
 
 	const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
 	if (!accessToken) {
@@ -84,44 +89,26 @@ async function main() {
 	}
 
 	const client = new hubspot.Client({ accessToken });
-	const contactIds = [];
-	let after = undefined;
+	let uniqueContactIds = await searchContactsSince({
+		client,
+		property,
+		sinceMillis,
+		limit,
+	});
 
-	while (true) {
-		const response = await client.crm.contacts.searchApi.doSearch({
-			filterGroups: [
-				{
-					filters: [
-						{
-							propertyName: property,
-							operator: "GTE",
-							value: sinceMillis,
-						},
-					],
-				},
-			],
-			properties: SYNC_PROPERTIES,
-			limit: 100,
-			after,
+	if (!uniqueContactIds.length) {
+		console.warn(
+			"resumeSync:backfill: search returned no contacts; falling back to full contact scan",
+			{ property, since: sinceDate.toISOString() },
+		);
+		uniqueContactIds = await scanContactsSince({
+			client,
+			property,
+			sinceMillis,
+			limit,
 		});
-
-		for (const result of response.results || []) {
-			if (result.id) {
-				contactIds.push(Number.parseInt(result.id, 10));
-			}
-		}
-
-		if (!response.paging?.next?.after) {
-			break;
-		}
-
-		after = response.paging.next.after;
-		if (limit && contactIds.length >= limit) {
-			break;
-		}
 	}
 
-	const uniqueContactIds = Array.from(new Set(contactIds)).filter(Boolean);
 	const cappedContactIds = limit
 		? uniqueContactIds.slice(0, limit)
 		: uniqueContactIds;
@@ -135,12 +122,91 @@ async function main() {
 		batchSize,
 	});
 
+	const hubspotClient = new hubspot.Client({ accessToken });
+	const bullhornSession = await getBullhornSession();
+	const syncableContactIds = [];
+
 	let processed = 0;
 	let skipped = 0;
 	let failed = 0;
+	let missingEmail = 0;
+	let missingHubSpotResume = 0;
+	let missingBullhornCandidate = 0;
+	let bullhornAlreadyHadResume = 0;
 
-	for (let i = 0; i < cappedContactIds.length; i += batchSize) {
-		const batch = cappedContactIds.slice(i, i + batchSize).map((objectId) => ({
+	for (const contactId of cappedContactIds) {
+		try {
+			const contact = await hubspotClient.crm.contacts.basicApi.getById(
+				contactId,
+				["email", "resume", ...CATEGORY_FIELDS],
+			);
+
+			const email = String(contact.properties?.email || "").trim();
+			const resumeValue = contact.properties?.resume;
+
+			if (!email) {
+				missingEmail += 1;
+				skipped += 1;
+				continue;
+			}
+
+			if (!resumeValue) {
+				missingHubSpotResume += 1;
+				skipped += 1;
+				continue;
+			}
+
+			const candidateId = await findCandidateIdByEmail(
+				bullhornSession,
+				email,
+			);
+			if (!candidateId) {
+				missingBullhornCandidate += 1;
+				skipped += 1;
+				continue;
+			}
+
+			const resumeState = await hasBullhornResume(
+				bullhornSession,
+				candidateId,
+			);
+			if (resumeState.hasResume) {
+				bullhornAlreadyHadResume += 1;
+				skipped += 1;
+				console.log(
+					"resumeSync:backfill: candidate already has Bullhorn resume",
+					{
+						contactId,
+						candidateId,
+					},
+				);
+				continue;
+			}
+
+			syncableContactIds.push(contactId);
+		} catch (error) {
+			failed += 1;
+			console.error("resumeSync:backfill: contact screening failed", {
+				contactId,
+				message: error.message,
+				status: error.response?.status,
+				data: error.response?.data,
+			});
+		}
+	}
+
+	console.log("resumeSync:backfill: screening summary", {
+		total: cappedContactIds.length,
+		syncable: syncableContactIds.length,
+		missingEmail,
+		missingHubSpotResume,
+		missingBullhornCandidate,
+		bullhornAlreadyHadResume,
+		failed,
+	});
+
+	for (let i = 0; i < syncableContactIds.length; i += batchSize) {
+		const batch = syncableContactIds.slice(i, i + batchSize).map((objectId) => ({
 			objectId,
 		}));
 
@@ -174,8 +240,107 @@ async function main() {
 		processed,
 		skipped,
 		failed,
-		total: cappedContactIds.length,
+		total: syncableContactIds.length,
 	});
+}
+
+async function searchContactsSince({ client, property, sinceMillis, limit }) {
+	const contactIds = [];
+	let after = undefined;
+
+	while (true) {
+		const response = await client.crm.contacts.searchApi.doSearch({
+			filterGroups: [
+				{
+					filters: [
+						{
+							propertyName: property,
+							operator: "GTE",
+							value: sinceMillis.toString(),
+						},
+					],
+				},
+			],
+			properties: SYNC_PROPERTIES,
+			limit: 100,
+			after,
+		});
+
+		for (const result of response.results || []) {
+			if (result.id) {
+				contactIds.push(Number.parseInt(result.id, 10));
+			}
+		}
+
+		if (limit && contactIds.length >= limit) {
+			break;
+		}
+
+		if (!response.paging?.next?.after) {
+			break;
+		}
+
+		after = response.paging.next.after;
+	}
+
+	return Array.from(new Set(contactIds)).filter(Boolean);
+}
+
+async function scanContactsSince({ client, property, sinceMillis, limit }) {
+	const contactIds = [];
+	const properties = Array.from(new Set([...SYNC_PROPERTIES, property]));
+	let after = undefined;
+
+	while (true) {
+		const response = await client.crm.contacts.basicApi.getPage(
+			100,
+			after,
+			properties,
+		);
+
+		for (const contact of response.results || []) {
+			const rawValue = contact?.properties?.[property];
+			const contactMillis = normalizeDateTimeValue(rawValue);
+			if (contact.id && contactMillis !== null && contactMillis >= sinceMillis) {
+				contactIds.push(Number.parseInt(contact.id, 10));
+			}
+		}
+
+		if (limit && contactIds.length >= limit) {
+			break;
+		}
+
+		if (!response.paging?.next?.after) {
+			break;
+		}
+
+		after = response.paging.next.after;
+	}
+
+	return Array.from(new Set(contactIds)).filter(Boolean);
+}
+
+function normalizeDateTimeValue(value) {
+	if (value === null || value === undefined || value === "") {
+		return null;
+	}
+
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return value;
+	}
+
+	const trimmed = String(value).trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	const asNumber = Number(trimmed);
+	if (Number.isFinite(asNumber)) {
+		return asNumber;
+	}
+
+	const asDate = Date.parse(trimmed);
+	return Number.isNaN(asDate) ? null : asDate;
 }
 
 main().catch((error) => {

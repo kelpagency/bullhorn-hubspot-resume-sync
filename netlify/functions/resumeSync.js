@@ -806,6 +806,46 @@ async function getCandidateName(session, candidateId) {
 	}
 }
 
+async function hasBullhornResume(session, candidateId) {
+	if (!session?.restUrl || !session?.bhRestToken) {
+		throw new Error("Missing Bullhorn session details");
+	}
+
+	if (!candidateId) {
+		return { hasResume: false, resumeValue: null };
+	}
+
+	try {
+		const response = await axios.get(
+			`${session.restUrl}entity/Candidate/${candidateId}`,
+			{
+				params: {
+					BhRestToken: session.bhRestToken,
+					fields: "resume",
+				},
+			},
+		);
+
+		const resumeValue = response.data?.data?.resume ?? null;
+		return {
+			hasResume: isBullhornResumeValuePresent(resumeValue),
+			resumeValue,
+		};
+	} catch (error) {
+		console.warn("resumeSync: failed to load Bullhorn candidate resume", {
+			candidateId,
+			message: error.message,
+			status: error.response?.status,
+			data: error.response?.data,
+		});
+		return {
+			hasResume: false,
+			resumeValue: null,
+			error: error.message,
+		};
+	}
+}
+
 async function updateCandidateCategory({ session, candidateId, categoryIds }) {
 	if (!session?.restUrl || !session?.bhRestToken) {
 		throw new Error("Missing Bullhorn session details");
@@ -1064,3 +1104,27 @@ function mapContentTypeToExtension(contentType) {
 
 	return mapping[lowerType] || "";
 }
+
+function isBullhornResumeValuePresent(value) {
+	if (value === null || value === undefined) {
+		return false;
+	}
+
+	if (typeof value === "string") {
+		return value.trim().length > 0;
+	}
+
+	if (Array.isArray(value)) {
+		return value.length > 0;
+	}
+
+	if (typeof value === "object") {
+		return Object.values(value).some((item) => isBullhornResumeValuePresent(item));
+	}
+
+	return Boolean(value);
+}
+
+exports.getBullhornSession = getBullhornSession;
+exports.findCandidateIdByEmail = findCandidateIdByEmail;
+exports.hasBullhornResume = hasBullhornResume;
