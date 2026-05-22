@@ -63,6 +63,18 @@ npm run resumeSync:local -- --payload path/to/payload.json
 If you omit `--payload`, it will run a default manual trigger against the
 contact ID in the script.
 
+To run the sync against a CSV of HubSpot contact IDs, use:
+
+```bash
+npm run resumeSync:local -- --csv hubspot-customers-to-sync.csv --csv-column "Record ID"
+```
+
+To verify the parsed IDs without calling HubSpot or Bullhorn, add `--dry-run`:
+
+```bash
+npm run resumeSync:local -- --csv hubspot-customers-to-sync.csv --csv-column "Record ID" --dry-run
+```
+
 Backfill recently missed contacts:
 
 ```bash
